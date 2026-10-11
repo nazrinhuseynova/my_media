@@ -6,7 +6,7 @@ using Pulse.API.Helpers;
 using Pulse.Domain.Entities;
 using Pulse.Infrastructure.Persistence;
 
-namespace my_media.Server.Pulse.API.Controllers;
+namespace Pulse.API.Controllers;
 
 [ApiController]
 [Authorize]
@@ -77,8 +77,9 @@ public class SearchController : ControllerBase
                 && p.User.IsActive && !p.User.IsBanned && !hidden.Contains(p.UserId)
                 && (!p.User.IsPrivate || p.UserId == me || following.Contains(p.UserId)))
             .ToListAsync();
+        var savedIds = await SavedIds(me, items.Select(p => p.Id));
         var followed = me.HasValue && await _db.HashtagFollows.AnyAsync(h => h.UserId == me && h.Tag == needle);
-        return Ok(new { tag, following = followed, items = items.Select(p => DtoMapper.MapPost(p, me, _db)) });
+        return Ok(new { tag, following = followed, items = items.Select(p => DtoMapper.MapPost(p, me, _db, savedIds)) });
     }
 
     [AllowAnonymous]
@@ -101,6 +102,19 @@ public class SearchController : ControllerBase
             .Where(p => !p.IsDeleted && !p.IsArchived && !p.IsDraft && p.Location == loc && (p.ScheduledAt == null || p.ScheduledAt <= now)
                 && p.User.IsActive && !p.User.IsBanned && !hidden.Contains(p.UserId)
                 && (!p.User.IsPrivate || p.UserId == me || following.Contains(p.UserId))).ToListAsync();
-        return Ok(new { location = loc, items = items.Select(p => DtoMapper.MapPost(p, me, _db)) });
+        var savedIds = await SavedIds(me, items.Select(p => p.Id));
+        return Ok(new { location = loc, items = items.Select(p => DtoMapper.MapPost(p, me, _db, savedIds)) });
+    }
+
+    private async Task<HashSet<Guid>> SavedIds(Guid? me, IEnumerable<Guid> postIds)
+    {
+        if (!me.HasValue) return new HashSet<Guid>();
+        var ids = postIds.ToList();
+        if (ids.Count == 0) return new HashSet<Guid>();
+        var saved = await _db.SavedPosts.AsNoTracking()
+            .Where(s => s.UserId == me && ids.Contains(s.PostId))
+            .Select(s => s.PostId)
+            .ToListAsync();
+        return saved.ToHashSet();
     }
 }

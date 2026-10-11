@@ -34,12 +34,17 @@ if (!fs.existsSync(certFilePath) || !fs.existsSync(keyFilePath)) {
     }
 }
 
-const target = env.ASPNETCORE_HTTPS_PORT ? `https://localhost:${env.ASPNETCORE_HTTPS_PORT}` :
-    env.ASPNETCORE_URLS ? env.ASPNETCORE_URLS.split(';')[0] : 'https://localhost:7056';
+const devPort = parseInt(env.DEV_SERVER_PORT || '53464');
+const apiTarget = 'http://localhost:5017';
 
 // https://vitejs.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
     plugins: [plugin()],
+    define: {
+        'process.env.REACT_APP_API_URL': JSON.stringify(
+            env.VITE_API_URL || (command === 'serve' ? `https://localhost:${devPort}` : apiTarget)
+        )
+    },
     resolve: {
         alias: {
             '@': fileURLToPath(new URL('./src', import.meta.url))
@@ -47,15 +52,27 @@ export default defineConfig({
     },
     server: {
         proxy: {
-            '^/weatherforecast': {
-                target,
+            '/api': {
+                target: apiTarget,
+                changeOrigin: true,
+                secure: false
+            },
+            '/hubs': {
+                target: apiTarget,
+                changeOrigin: true,
+                secure: false,
+                ws: true
+            },
+            '/uploads': {
+                target: apiTarget,
+                changeOrigin: true,
                 secure: false
             }
         },
-        port: parseInt(env.DEV_SERVER_PORT || '53464'),
+        port: devPort,
         https: {
             key: fs.readFileSync(keyFilePath),
             cert: fs.readFileSync(certFilePath),
         }
     }
-})
+}))

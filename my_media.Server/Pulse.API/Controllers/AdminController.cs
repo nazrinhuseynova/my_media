@@ -6,7 +6,7 @@ using Pulse.API.Helpers;
 using Pulse.Domain.Entities;
 using Pulse.Infrastructure.Persistence;
 
-namespace my_media.Server.Pulse.API.Controllers;
+namespace Pulse.API.Controllers;
 
 [ApiController]
 [Authorize(Roles = "Admin")]

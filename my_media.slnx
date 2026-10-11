@@ -1,7 +1,10 @@
 <Solution>
+  <Project Path="my_media.Server/Pulse.Server.csproj" DefaultStartup="true" />
   <Project Path="my_media.client/Pulse.client.esproj">
     <Build />
     <Deploy />
   </Project>
-  <Project Path="my_media.Server/Pulse.Server.csproj" />
+  <Project Path="my_media.Server/Pulse.Application/Pulse.Application.csproj" />
+  <Project Path="my_media.Server/Pulse.Domain/Pulse.Domain.csproj" />
+  <Project Path="my_media.Server/Pulse.Infrastructure/Pulse.Infrastructure.csproj" />
 </Solution>

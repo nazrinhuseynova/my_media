@@ -20,10 +20,13 @@ public class AppDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, Guid>
     public DbSet<FollowRequest> FollowRequests => Set<FollowRequest>();
     public DbSet<Block> Blocks => Set<Block>();
     public DbSet<Story> Stories => Set<Story>();
+    public DbSet<LiveRoom> LiveRooms => Set<LiveRoom>();
+    public DbSet<LiveSeat> LiveSeats => Set<LiveSeat>();
     public DbSet<StoryView> StoryViews => Set<StoryView>();
     public DbSet<Reel> Reels => Set<Reel>();
     public DbSet<ReelLike> ReelLikes => Set<ReelLike>();
     public DbSet<ReelComment> ReelComments => Set<ReelComment>();
+    public DbSet<ReelCommentLike> ReelCommentLikes => Set<ReelCommentLike>();
     public DbSet<SavedPost> SavedPosts => Set<SavedPost>();
     public DbSet<SavedReel> SavedReels => Set<SavedReel>();
     public DbSet<Collection> Collections => Set<Collection>();
@@ -100,6 +103,18 @@ public class AppDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, Guid>
         builder.Entity<CommentLike>().Property(x => x.Reaction).HasMaxLength(20).HasDefaultValue("like");
         builder.Entity<ReelLike>().Property(x => x.Reaction).HasMaxLength(20).HasDefaultValue("like");
         builder.Entity<Story>().Property(x => x.Audience).HasMaxLength(16);
+        builder.Entity<LiveRoom>().Property(x => x.Title).HasMaxLength(80);
+        builder.Entity<LiveSeat>().HasIndex(x => new { x.RoomId, x.UserId }).IsUnique();
+        builder.Entity<LiveSeat>()
+            .HasOne(x => x.Room)
+            .WithMany(x => x.Seats)
+            .HasForeignKey(x => x.RoomId)
+            .OnDelete(DeleteBehavior.Cascade);
+        builder.Entity<LiveSeat>()
+            .HasOne(x => x.User)
+            .WithMany()
+            .HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.Restrict);
         builder.Entity<HashtagFollow>().Property(x => x.Tag).HasMaxLength(80);
         builder.Entity<Highlight>().Property(x => x.Name).HasMaxLength(40);
 
@@ -177,6 +192,20 @@ public class AppDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, Guid>
             .OnDelete(DeleteBehavior.Restrict);
 
         builder.Entity<ReelComment>()
+            .HasOne(x => x.User)
+            .WithMany()
+            .HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.Entity<ReelComment>()
+            .HasOne(x => x.Parent)
+            .WithMany()
+            .HasForeignKey(x => x.ParentId)
+            .OnDelete(DeleteBehavior.NoAction);
+
+        builder.Entity<ReelCommentLike>().Property(x => x.Reaction).HasMaxLength(20).HasDefaultValue("like");
+        builder.Entity<ReelCommentLike>().HasIndex(x => new { x.CommentId, x.UserId }).IsUnique();
+        builder.Entity<ReelCommentLike>()
             .HasOne(x => x.User)
             .WithMany()
             .HasForeignKey(x => x.UserId)

@@ -37,6 +37,12 @@ public class ForgotRequest
     public string Contact { get; set; } = string.Empty;
 }
 
+public class ResendOtpRequest
+{
+    public Guid UserId { get; set; }
+    public string Type { get; set; } = "register";
+}
+
 public class SocialLoginRequest
 {
     public string? Email { get; set; }

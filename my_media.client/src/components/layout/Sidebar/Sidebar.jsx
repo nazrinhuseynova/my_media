@@ -14,7 +14,10 @@ export default function Sidebar() {
 
   return (
     <aside className="sidebar">
-      <div className="brand">Pulse</div>
+      <div className="brand-block">
+        <div className="brand">Pulse</div>
+        <p className="brand-tag">Paylaş, izlə, yazış</p>
+      </div>
       <NavLink to="/" className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`} end>
         <Icon name="home" filled /><span>Ana səhifə</span>
       </NavLink>

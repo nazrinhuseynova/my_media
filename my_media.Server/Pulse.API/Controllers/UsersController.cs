@@ -9,7 +9,7 @@ using Pulse.Application.Notifications.Interfaces;
 using Pulse.Domain.Entities;
 using Pulse.Infrastructure.Persistence;
 
-namespace my_media.Server.Pulse.API.Controllers;
+namespace Pulse.API.Controllers;
 
 [ApiController]
 [Authorize]
@@ -42,7 +42,7 @@ public class UsersController : ControllerBase
         var canSee = !restricted && (!user.IsPrivate || (me.HasValue && (me == user.Id || await _db.Follows.AnyAsync(f => f.FollowerId == me && f.FollowingId == user.Id))));
         var now = DateTime.UtcNow;
         var posts = canSee
-            ? await _db.Posts.Include(p => p.User).Include(p => p.Media).Include(p => p.Likes).ThenInclude(l => l.User).Include(p => p.Comments)
+            ? await _db.Posts.AsNoTracking().AsSplitQuery().Include(p => p.User).Include(p => p.Media).Include(p => p.Likes).ThenInclude(l => l.User).Include(p => p.Comments)
                 .Include(p => p.Tags).ThenInclude(t => t.User)
                 .Include(p => p.PollOptions).ThenInclude(o => o.Votes)
                 .Where(p => p.UserId == user.Id && !p.IsDeleted && !p.IsArchived && !p.IsDraft && (me == user.Id || p.ScheduledAt == null || p.ScheduledAt <= now))
@@ -68,12 +68,15 @@ public class UsersController : ControllerBase
         else if (me.HasValue && await _db.FollowRequests.AnyAsync(r => r.FromId == me && r.ToId == user.Id && r.Status == "pending")) relation = "requested";
 
         var role = await DtoMapper.GetRole(_users, user);
+        var savedIds = me.HasValue
+            ? (await _db.SavedPosts.Where(s => s.UserId == me.Value).Select(s => s.PostId).ToListAsync()).ToHashSet()
+            : new HashSet<Guid>();
         return Ok(new
         {
             user = DtoMapper.MapUser(user, role),
             followers,
             following,
-            posts = posts.Select(p => DtoMapper.MapPost(p, me, _db)),
+            posts = posts.Select(p => DtoMapper.MapPost(p, me, _db, savedIds)),
             relation,
             blocked = me.HasValue && await _db.Blocks.AnyAsync(b => b.BlockerId == me && b.BlockedId == user.Id),
             restricted,

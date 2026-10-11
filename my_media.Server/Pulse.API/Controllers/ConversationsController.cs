@@ -11,7 +11,7 @@ using Pulse.Domain.Entities;
 using Pulse.Infrastructure.Persistence;
 using Pulse.Infrastructure.Realtime;
 
-namespace my_media.Server.Pulse.API.Controllers;
+namespace Pulse.API.Controllers;
 
 [ApiController]
 [Authorize]

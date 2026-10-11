@@ -14,7 +14,7 @@ using Pulse.Application.Mail;
 using Pulse.Domain.Entities;
 using Pulse.Infrastructure.Persistence;
 
-namespace my_media.Server.Pulse.API.Controllers;
+namespace Pulse.API.Controllers;
 
 [ApiController]
 [Route("api/auth")]
@@ -43,27 +43,48 @@ public class AuthController : ControllerBase
         var username = (request.Username ?? "").Trim();
         var contact = (request.Contact ?? "").Trim();
         var fullName = (request.FullName ?? "").Trim();
+        var passwordError = PasswordProblem(request.Password);
+        if (username.Length < 3 || username.Length > 20 || username.Any(c => !char.IsLetterOrDigit(c) && c is not '.' and not '_'))
+        {
+            return BadRequest(new { message = "İstifadəçi adı 3-20 simvol, hərf, rəqəm, . və _ ola bilər" });
+        }
+
+        if (fullName.Length < 2)
+        {
+            return BadRequest(new { message = "Ad və soyad daxil edin" });
+        }
+
+        if (passwordError != null)
+        {
+            return BadRequest(new { message = passwordError });
+        }
 
         if (await _users.FindByNameAsync(username) != null)
         {
-            return BadRequest(new { message = "Bu istifadeci artiq movcuddur" });
+            return BadRequest(new { message = "Bu istifadəçi artıq mövcuddur" });
         }
 
         var isEmail = contact.Contains('@');
         if (isEmail)
         {
+            contact = contact.ToLowerInvariant();
             var emailTaken = await _users.FindByEmailAsync(contact);
             if (emailTaken != null)
             {
-                return BadRequest(new { message = "Bu email artiq istifade olunur" });
+                return BadRequest(new { message = "Bu email artıq istifadə olunur" });
             }
         }
         else
         {
-            var phone = contact.Replace(" ", "");
-            if (await _users.Users.AnyAsync(u => u.PhoneNumber == phone))
+            contact = contact.Replace(" ", "");
+            if (contact.Length < 9)
             {
-                return BadRequest(new { message = "Bu nomre artiq istifade olunur" });
+                return BadRequest(new { message = "Düzgün telefon yazın" });
+            }
+
+            if (await _users.Users.AnyAsync(u => u.PhoneNumber == contact))
+            {
+                return BadRequest(new { message = "Bu nömrə artıq istifadə olunur" });
             }
         }
 
@@ -72,7 +93,7 @@ public class AuthController : ControllerBase
             Id = Guid.NewGuid(),
             UserName = username,
             Email = isEmail ? contact : $"{username}@pulse.local",
-            PhoneNumber = isEmail ? null : contact.Replace(" ", ""),
+            PhoneNumber = isEmail ? null : contact,
             FullName = fullName,
             AvatarUrl = $"https://i.pravatar.cc/300?u={username}",
             EmailConfirmed = false,
@@ -87,18 +108,8 @@ public class AuthController : ControllerBase
 
         await _users.AddToRoleAsync(user, "User");
 
-        var code = Random.Shared.Next(100000, 999999).ToString();
-        _db.OtpCodes.Add(new OtpCode
-        {
-            UserId = user.Id,
-            Contact = contact,
-            Code = code,
-            Type = "register"
-        });
-        await _db.SaveChangesAsync();
-        await _otp.SendAsync(contact, code);
-
-        return Ok(new { message = "OTP gonderildi", previewCode = _env.IsDevelopment() ? code : null, userId = user.Id });
+        var code = await IssueOtpAsync(user, contact, "register");
+        return Ok(new { message = "Kod göndərildi", previewCode = Preview(code), userId = user.Id });
     }
 
     [HttpPost("login")]
@@ -107,12 +118,19 @@ public class AuthController : ControllerBase
         var user = await FindUserAsync(request.Contact);
         if (user == null || !await _users.CheckPasswordAsync(user, request.Password ?? ""))
         {
-            return Unauthorized(new { message = "Istifadeci adi ve ya sifre yanlisdir" });
+            return Unauthorized(new { message = "İstifadəçi adı və ya şifrə yanlışdır" });
         }
 
         if (!user.EmailConfirmed)
         {
-            return StatusCode(403, new { message = "Evvelce email/telefon kodunu tesdiqleyin" });
+            var code = await IssueOtpAsync(user, request.Contact ?? user.Email ?? user.UserName ?? "", "register");
+            return StatusCode(403, new
+            {
+                message = "Əvvəlcə kodu təsdiqləyin",
+                needsOtp = true,
+                userId = user.Id,
+                previewCode = Preview(code)
+            });
         }
 
         var blocked = CheckAccount(user);
@@ -128,12 +146,26 @@ public class AuthController : ControllerBase
         var provider = Request.Path.Value!.Contains("google") ? "google" : "apple";
         if (string.IsNullOrWhiteSpace(request.Email) || !request.Email.Contains('@'))
         {
-            return BadRequest(new { message = "Google/Apple email daxil edin" });
+            return BadRequest(new { message = "Düzgün email yazın" });
         }
 
         var email = request.Email.Trim().ToLowerInvariant();
         var user = await _users.FindByEmailAsync(email);
-        if (user == null)
+        if (user != null)
+        {
+            var current = string.IsNullOrWhiteSpace(user.Provider) ? "email" : user.Provider;
+            if (!current.Equals(provider, StringComparison.OrdinalIgnoreCase))
+            {
+                var via = current.ToLowerInvariant() switch
+                {
+                    "google" => "Google",
+                    "apple" => "Apple",
+                    _ => "şifrə"
+                };
+                return Conflict(new { message = $"Bu email artıq {via} ilə qeydiyyatdadır. Həmin üsulla daxil ol." });
+            }
+        }
+        else
         {
             var baseName = MakeUserName(email);
             var username = baseName;
@@ -177,15 +209,27 @@ public class AuthController : ControllerBase
         var user = await FindUserAsync(request.Contact);
         if (user == null)
         {
-            return NotFound(new { message = "Istifadeci tapilmadi" });
+            return NotFound(new { message = "İstifadəçi tapılmadı" });
         }
 
-        var code = Random.Shared.Next(100000, 999999).ToString();
         var contact = (request.Contact ?? "").Trim();
-        _db.OtpCodes.Add(new OtpCode { UserId = user.Id, Contact = contact, Code = code, Type = "reset" });
-        await _db.SaveChangesAsync();
-        await _otp.SendAsync(contact, code);
-        return Ok(new { message = "Kod gonderildi", previewCode = _env.IsDevelopment() ? code : null, userId = user.Id });
+        var code = await IssueOtpAsync(user, contact, "reset");
+        return Ok(new { message = "Kod göndərildi", previewCode = Preview(code), userId = user.Id });
+    }
+
+    [HttpPost("resend-otp")]
+    public async Task<IActionResult> Resend(ResendOtpRequest request)
+    {
+        var user = await _users.FindByIdAsync(request.UserId.ToString());
+        if (user == null)
+        {
+            return NotFound(new { message = "İstifadəçi tapılmadı" });
+        }
+
+        var type = request.Type == "reset" ? "reset" : "register";
+        var contact = string.IsNullOrWhiteSpace(user.PhoneNumber) ? user.Email ?? user.UserName ?? "" : user.PhoneNumber;
+        var code = await IssueOtpAsync(user, contact, type);
+        return Ok(new { message = "Kod yenidən göndərildi", previewCode = Preview(code) });
     }
 
     [HttpPost("verify-otp")]
@@ -198,13 +242,13 @@ public class AuthController : ControllerBase
 
         if (otp == null || DateTime.UtcNow - otp.CreatedAt > TimeSpan.FromMinutes(10))
         {
-            return BadRequest(new { message = "Kod yanlisdir ve ya vaxti bitib" });
+            return BadRequest(new { message = "Kod yanlışdır və ya vaxtı bitib" });
         }
 
         var user = await _users.FindByIdAsync(request.UserId.ToString());
         if (user == null)
         {
-            return NotFound(new { message = "Istifadeci tapilmadi" });
+            return NotFound(new { message = "İstifadəçi tapılmadı" });
         }
 
         user.EmailConfirmed = true;
@@ -224,6 +268,12 @@ public class AuthController : ControllerBase
     [HttpPost("reset-password")]
     public async Task<IActionResult> Reset(ResetPasswordRequest request)
     {
+        var passwordError = PasswordProblem(request.Password);
+        if (passwordError != null)
+        {
+            return BadRequest(new { message = passwordError });
+        }
+
         var key = _config["Jwt:Key"] ?? "";
         var handler = new JwtSecurityTokenHandler();
         System.Security.Claims.ClaimsPrincipal principal;
@@ -243,15 +293,15 @@ public class AuthController : ControllerBase
         }
         catch
         {
-            return BadRequest(new { message = "Sifre kodu yanlisdir ve ya vaxti bitib" });
+            return BadRequest(new { message = "Şifrə kodu yanlışdır və ya vaxtı bitib" });
         }
         var id = principal.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
             ?? principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
-        if (string.IsNullOrWhiteSpace(id)) return BadRequest(new { message = "Sifre kodu yanlisdir ve ya vaxti bitib" });
+        if (string.IsNullOrWhiteSpace(id)) return BadRequest(new { message = "Şifrə kodu yanlışdır və ya vaxtı bitib" });
         var user = await _users.FindByIdAsync(id);
         if (user == null)
         {
-            return NotFound(new { message = "Istifadeci tapilmadi" });
+            return NotFound(new { message = "İstifadəçi tapılmadı" });
         }
 
         var token = await _users.GeneratePasswordResetTokenAsync(user);
@@ -261,7 +311,7 @@ public class AuthController : ControllerBase
             return BadRequest(new { message = result.Errors.First().Description });
         }
 
-        return Ok(new { message = "Sifre yenilendi" });
+        return Ok(new { message = "Şifrə yeniləndi" });
     }
 
     [Authorize]
@@ -355,7 +405,53 @@ public class AuthController : ControllerBase
     private IActionResult? CheckAccount(AppUser user)
     {
         if (!user.IsActive) return StatusCode(403, new { message = "Hesab deaktivdir" });
-        if (user.IsBanned) return StatusCode(403, new { message = "Hesab dayandirilib" });
+        if (user.IsBanned) return StatusCode(403, new { message = "Hesab dayandırılıb" });
+        return null;
+    }
+
+    private async Task<string> IssueOtpAsync(AppUser user, string contact, string type)
+    {
+        var old = await _db.OtpCodes.Where(x => x.UserId == user.Id && x.Type == type).ToListAsync();
+        if (old.Count > 0)
+        {
+            _db.OtpCodes.RemoveRange(old);
+        }
+
+        var code = Random.Shared.Next(100000, 999999).ToString();
+        _db.OtpCodes.Add(new OtpCode
+        {
+            UserId = user.Id,
+            Contact = contact,
+            Code = code,
+            Type = type
+        });
+        await _db.SaveChangesAsync();
+        await _otp.SendAsync(contact, code);
+        return code;
+    }
+
+    private string? Preview(string code)
+    {
+        if (_env.IsDevelopment() || !string.IsNullOrWhiteSpace(_config["Smtp:PickupDirectory"]))
+        {
+            return code;
+        }
+
+        return null;
+    }
+
+    private static string? PasswordProblem(string? password)
+    {
+        if (string.IsNullOrEmpty(password) || password.Length < 8)
+        {
+            return "Şifrə ən az 8 simvol olmalıdır";
+        }
+
+        if (!password.Any(char.IsLower) || !password.Any(char.IsDigit))
+        {
+            return "Şifrədə kiçik hərf və rəqəm olmalıdır";
+        }
+
         return null;
     }
 
@@ -364,11 +460,13 @@ public class AuthController : ControllerBase
         var code = result.Errors.FirstOrDefault()?.Code ?? "";
         return code switch
         {
-            "DuplicateUserName" => "Bu istifadeci artiq movcuddur",
-            "DuplicateEmail" => "Bu email artiq istifade olunur",
-            "PasswordMismatch" => "Cari sifre yanlisdir",
-            "PasswordTooShort" => "Sifre en az 6 simvol olmalidir",
-            "PasswordRequiresDigit" => "Sifrede reqem olmalidir",
+            "DuplicateUserName" => "Bu istifadəçi artıq mövcuddur",
+            "DuplicateEmail" => "Bu email artıq istifadə olunur",
+            "PasswordMismatch" => "Cari şifrə yanlışdır",
+            "PasswordTooShort" => "Şifrə ən az 8 simvol olmalıdır",
+            "PasswordRequiresDigit" => "Şifrədə rəqəm olmalıdır",
+            "PasswordRequiresLower" => "Şifrədə kiçik hərf olmalıdır",
+            "PasswordRequiresUpper" => "Şifrədə böyük hərf olmalıdır",
             _ => result.Errors.First().Description
         };
     }

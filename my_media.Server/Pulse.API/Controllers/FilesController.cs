@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Pulse.Application.Files;
 using Pulse.Application.Files.Interfaces;
 
-namespace my_media.Server.Pulse.API.Controllers;
+namespace Pulse.API.Controllers;
 
 [ApiController]
 [Authorize]

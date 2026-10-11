@@ -1,0 +1,11 @@
+[
+  {
+    "Name": "Pulse.Server",
+    "Projects": [
+      {
+        "Path": "my_media.Server\\Pulse.Server.csproj",
+        "Action": "Start"
+      }
+    ]
+  }
+]

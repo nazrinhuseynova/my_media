@@ -7,25 +7,23 @@
     <SpaRoot>..\my_media.client</SpaRoot>
     <SpaProxyLaunchCommand>npm run dev</SpaProxyLaunchCommand>
     <SpaProxyServerUrl>https://localhost:53464</SpaProxyServerUrl>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Pulse.Application\**;Pulse.Domain\**;Pulse.Infrastructure\**;Pulse.API\bin\**;Pulse.API\obj\**;Pulse.slnx;**\*.csproj</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="Pulse.API\Pulse.API.csproj" />
-    <None Include="Pulse.API\Pulse.API.csproj.user" />
-    <None Include="Pulse.Application\Pulse.Application.csproj" />
-    <None Include="Pulse.Domain\Pulse.Domain.csproj" />
-    <None Include="Pulse.Infrastructure\Pulse.Infrastructure.csproj" />
-    <None Include="Pulse.slnx" />
-  </ItemGroup>
-
-  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.31" />
     <PackageReference Include="Microsoft.AspNetCore.SpaProxy">
       <Version>8.*-*</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.31">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="Pulse.Infrastructure\Pulse.Infrastructure.csproj" />
     <ProjectReference Include="..\my_media.client\Pulse.client.esproj">
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
     </ProjectReference>

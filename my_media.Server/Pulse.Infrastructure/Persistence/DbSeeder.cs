@@ -22,6 +22,7 @@ public static class DbSeeder
         if (await users.Users.AnyAsync())
         {
             await EnsureFollowedStoriesAsync(db, users);
+            await EnsureLivesAsync(db, users);
             await LinkMusicAsync(db);
             return;
         }
@@ -145,6 +146,23 @@ public static class DbSeeder
             Text = "elvin senin paylasimini beyendi"
         });
 
+        await db.SaveChangesAsync();
+        await EnsureLivesAsync(db, users);
+    }
+
+    private static async Task EnsureLivesAsync(AppDbContext db, UserManager<AppUser> users)
+    {
+        if (await db.LiveRooms.AnyAsync()) return;
+        var elvin = await users.FindByNameAsync("elvin");
+        var kamran = await users.FindByNameAsync("kamran");
+        var leyla = await users.FindByNameAsync("leyla");
+        if (elvin == null || kamran == null || leyla == null) return;
+        var solo = new LiveRoom { Title = "Axşam danışığı" };
+        solo.Seats.Add(new LiveSeat { UserId = elvin.Id, SortOrder = 0 });
+        var duo = new LiveRoom { Title = "Birlikdə yayım" };
+        duo.Seats.Add(new LiveSeat { UserId = kamran.Id, SortOrder = 0 });
+        duo.Seats.Add(new LiveSeat { UserId = leyla.Id, SortOrder = 1 });
+        db.LiveRooms.AddRange(solo, duo);
         await db.SaveChangesAsync();
     }
 

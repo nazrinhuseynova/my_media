@@ -23,7 +23,8 @@ public static class StoredMedia
         }
 
         if (url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-            || url.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+            || url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || url.StartsWith("/", StringComparison.Ordinal))
         {
             return (url, FileNames.Normalize(extension, url));
         }

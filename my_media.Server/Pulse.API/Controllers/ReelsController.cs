@@ -8,7 +8,7 @@ using Pulse.Application.Notifications.Interfaces;
 using Pulse.Domain.Entities;
 using Pulse.Infrastructure.Persistence;
 
-namespace my_media.Server.Pulse.API.Controllers;
+namespace Pulse.API.Controllers;
 
 [ApiController]
 [Authorize]
@@ -100,18 +100,11 @@ public class ReelsController : ControllerBase
         Guid? me = User.Identity?.IsAuthenticated == true ? DtoMapper.GetUserId(User) : null;
         var reel = await _db.Reels.Include(r => r.User).FirstOrDefaultAsync(r => r.Id == id);
         if (reel == null || !await CanSeeReel(reel, me)) return NotFound();
-        var items = await _db.ReelComments.Include(c => c.User)
+        var items = await _db.ReelComments.Include(c => c.User).Include(c => c.Likes).ThenInclude(l => l.User)
             .Where(c => c.ReelId == id)
             .OrderBy(c => c.CreatedAt)
             .ToListAsync();
-        return Ok(items.Select(c => new
-        {
-            id = c.Id.ToString(),
-            reelId = c.ReelId.ToString(),
-            text = c.Text,
-            createdAt = c.CreatedAt,
-            user = DtoMapper.MapUser(c.User)
-        }));
+        return Ok(items.Select(c => MapReelComment(c, me)));
     }
 
     [HttpPost("/api/reels/{id:guid}/comments")]
@@ -122,21 +115,82 @@ public class ReelsController : ControllerBase
         if (reel == null || !await CanSeeReel(reel, me)) return NotFound();
         var text = (body.Text ?? "").Trim();
         if (text.Length == 0) return BadRequest(new { message = "Serh yazin" });
-        var c = new ReelComment { ReelId = id, UserId = me, Text = text };
+        Guid? parent = Guid.TryParse(body.ParentId, out var pid) ? pid : null;
+        if (parent.HasValue && !await _db.ReelComments.AnyAsync(c => c.Id == parent && c.ReelId == id))
+            return BadRequest(new { message = "Cavab tapilmadi" });
+        var c = new ReelComment { ReelId = id, UserId = me, Text = text, ParentId = parent, Likes = new List<ReelCommentLike>() };
         _db.ReelComments.Add(c);
         await _db.SaveChangesAsync();
         if (reel.UserId != me)
-            await _notes.AddAsync(reel.UserId, me, "comment", id.ToString(), "reelinə şərh yazdı");
+            await _notes.AddAsync(reel.UserId, me, "comment", id.ToString(), parent.HasValue ? "reel şərhinə cavab yazdı" : "reelinə şərh yazdı");
         await MentionHelper.NotifyAsync(_db, _notes, me, text, id.ToString(), "Seni reel serhinde isareledi");
         var user = await _db.Users.FindAsync(me);
-        return StatusCode(201, new
+        c.User = user!;
+        return StatusCode(201, MapReelComment(c, me));
+    }
+
+    [HttpPost("/api/reel-comments/{id:guid}/react")]
+    public async Task<IActionResult> ReactComment(Guid id, [FromBody] ReelReactionBody body)
+    {
+        if (!PostReactions.Allowed(body?.Reaction)) return BadRequest(new { message = "Reaksiya secilmedi" });
+        var reaction = PostReactions.Normalize(body!.Reaction);
+        var me = DtoMapper.GetUserId(User);
+        var comment = await _db.ReelComments.Include(c => c.Reel).ThenInclude(r => r.User).FirstOrDefaultAsync(c => c.Id == id);
+        if (comment?.Reel == null || !await CanSeeReel(comment.Reel, me)) return NotFound();
+        var existing = await _db.ReelCommentLikes.FirstOrDefaultAsync(x => x.CommentId == id && x.UserId == me);
+        if (existing != null && PostReactions.Normalize(existing.Reaction) == reaction) _db.ReelCommentLikes.Remove(existing);
+        else if (existing != null) existing.Reaction = reaction;
+        else
         {
-            id = c.Id.ToString(),
-            reelId = id.ToString(),
-            text = c.Text,
-            createdAt = c.CreatedAt,
-            user = DtoMapper.MapUser(user!)
-        });
+            var item = new ReelCommentLike { CommentId = id, UserId = me, Reaction = reaction };
+            _db.ReelCommentLikes.Add(item);
+            _db.Entry(item).State = EntityState.Added;
+            if (comment.UserId != me)
+                await _notes.AddAsync(comment.UserId, me, "like", comment.ReelId.ToString(), "reel şərhinə reaksiya verdi");
+        }
+        await _db.SaveChangesAsync();
+        var likes = await _db.ReelCommentLikes.Include(x => x.User).Where(x => x.CommentId == id).ToListAsync();
+        return Ok(DtoMapper.SummarizeReactions(likes, me));
+    }
+
+    [HttpPatch("/api/reel-comments/{id:guid}")]
+    public async Task<IActionResult> EditComment(Guid id, [FromBody] CommentBody body)
+    {
+        var me = DtoMapper.GetUserId(User);
+        var comment = await _db.ReelComments.Include(c => c.User).Include(c => c.Likes).ThenInclude(l => l.User).FirstOrDefaultAsync(c => c.Id == id);
+        if (comment == null || comment.UserId != me) return StatusCode(403, new { message = "Redakte icazesi yoxdur" });
+        var text = (body.Text ?? "").Trim();
+        if (text.Length == 0) return BadRequest(new { message = "Serh bos ola bilmez" });
+        comment.Text = text;
+        await _db.SaveChangesAsync();
+        return Ok(MapReelComment(comment, me));
+    }
+
+    [HttpDelete("/api/reel-comments/{id:guid}")]
+    public async Task<IActionResult> DeleteComment(Guid id)
+    {
+        var me = DtoMapper.GetUserId(User);
+        var comment = await _db.ReelComments.FindAsync(id);
+        if (comment == null) return NotFound();
+        if (comment.UserId != me && !User.IsInRole("Admin")) return StatusCode(403, new { message = "Silmek olmaz" });
+        var family = await _db.ReelComments.Where(c => c.ReelId == comment.ReelId).ToListAsync();
+        var drop = new List<ReelComment>();
+        void Collect(Guid root)
+        {
+            foreach (var child in family.Where(c => c.ParentId == root))
+            {
+                Collect(child.Id);
+                drop.Add(child);
+            }
+        }
+        Collect(id);
+        drop.Add(comment);
+        var dropIds = drop.Select(c => c.Id).ToList();
+        var likes = await _db.ReelCommentLikes.Where(l => dropIds.Contains(l.CommentId)).ToListAsync();
+        _db.ReelCommentLikes.RemoveRange(likes);
+        _db.ReelComments.RemoveRange(drop);
+        await _db.SaveChangesAsync();
+        return Ok(new { message = "Silindi" });
     }
 
     [HttpPost("/api/reels/{id:guid}/save")]
@@ -182,6 +236,26 @@ public class ReelsController : ControllerBase
         await _db.SaveChangesAsync();
         var likes = await _db.ReelLikes.Include(x => x.User).Where(x => x.ReelId == id).ToListAsync();
         return Ok(DtoMapper.SummarizeReactions(likes, me));
+    }
+
+    private static object MapReelComment(ReelComment c, Guid? me)
+    {
+        var reactions = DtoMapper.SummarizeReactions(c.Likes, me);
+        return new
+        {
+            id = c.Id.ToString(),
+            reelId = c.ReelId.ToString(),
+            userId = c.UserId.ToString(),
+            text = c.Text,
+            parentId = c.ParentId?.ToString(),
+            likeCount = reactions.LikeCount,
+            liked = reactions.Liked,
+            myReaction = reactions.MyReaction,
+            reactionCount = reactions.ReactionCount,
+            reactions = reactions.Reactions,
+            createdAt = c.CreatedAt,
+            user = c.User == null ? null : DtoMapper.MapUser(c.User)
+        };
     }
 
     private async Task<bool> CanSeeReel(Reel reel, Guid? me)

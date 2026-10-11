@@ -8,7 +8,7 @@ using Pulse.Application.Notifications.Interfaces;
 using Pulse.Domain.Entities;
 using Pulse.Infrastructure.Persistence;
 
-namespace my_media.Server.Pulse.API.Controllers;
+namespace Pulse.API.Controllers;
 
 [ApiController]
 [Authorize]
@@ -24,6 +24,9 @@ public class PostsController : ControllerBase
         _files = files;
         _notes = notes;
     }
+
+    private IQueryable<Post> ReadPosts()
+        => PostsQuery().AsNoTracking();
 
     private IQueryable<Post> PostsQuery()
         => _db.Posts.AsSplitQuery().Where(p => !p.IsDeleted)
@@ -48,23 +51,245 @@ public class PostsController : ControllerBase
     [HttpGet("/api/feed")]
     public async Task<IActionResult> Feed([FromQuery] int page = 1, [FromQuery] int limit = 5)
     {
-        var me = DtoMapper.GetUserId(User);
-        var following = await _db.Follows.Where(f => f.FollowerId == me).Select(f => f.FollowingId).ToListAsync();
-        following.Add(me);
-        var muted = await _db.UserMutes.Where(m => m.UserId == me).Select(m => m.MutedId).ToListAsync();
+        if (page < 1) page = 1;
+        if (limit < 1) limit = 5;
+        if (limit > 20) limit = 20;
 
-        var hidden = await HiddenUserIds(me);
-        var q = LivePosts().Where(p => !muted.Contains(p.UserId) && !hidden.Contains(p.UserId) && p.User.IsActive && !p.User.IsBanned && (
-                following.Contains(p.UserId) ||
-                (!p.User.IsPrivate && _db.HashtagFollows.Any(h => h.UserId == me && ("," + p.Hashtags + ",").Contains("," + h.Tag + ",")))))
-            .OrderByDescending(p => p.ScheduledAt ?? p.CreatedAt);
-        var total = await q.CountAsync();
-        var items = await q.Skip((page - 1) * limit).Take(limit).ToListAsync();
-        return Ok(new
+        var me = DtoMapper.GetUserId(User);
+        var now = DateTime.UtcNow;
+        var following = await _db.Follows.AsNoTracking().Where(f => f.FollowerId == me).Select(f => f.FollowingId).ToListAsync();
+        following.Add(me);
+        var skip = await _db.UserMutes.AsNoTracking().Where(m => m.UserId == me).Select(m => m.MutedId).ToListAsync();
+        skip.AddRange(await HiddenUserIds(me));
+        var hidden = skip.ToHashSet();
+        var authors = following.Where(id => !hidden.Contains(id)).Distinct().ToList();
+        var window = page * limit + 1;
+
+        var followedRows = await _db.Posts.AsNoTracking()
+            .Where(p => !p.IsDeleted && !p.IsArchived && !p.IsDraft
+                && (p.ScheduledAt == null || p.ScheduledAt <= now)
+                && authors.Contains(p.UserId)
+                && p.User.IsActive && !p.User.IsBanned)
+            .OrderByDescending(p => p.ScheduledAt ?? p.CreatedAt)
+            .Select(p => new { p.Id, When = p.ScheduledAt ?? p.CreatedAt })
+            .Take(window)
+            .ToListAsync();
+
+        var tags = await _db.HashtagFollows.AsNoTracking().Where(h => h.UserId == me).Select(h => h.Tag).ToListAsync();
+        var taggedRows = new List<(Guid Id, DateTime When)>();
+        if (tags.Count > 0)
         {
-            items = items.Select(p => DtoMapper.MapPost(p, me, _db)).ToList(),
-            hasMore = page * limit < total
-        });
+            var needles = tags.Select(t => "," + t.ToLowerInvariant() + ",").ToList();
+            var candidates = await _db.Posts.AsNoTracking()
+                .Where(p => !p.IsDeleted && !p.IsArchived && !p.IsDraft
+                    && (p.ScheduledAt == null || p.ScheduledAt <= now)
+                    && !p.User.IsPrivate && p.User.IsActive && !p.User.IsBanned
+                    && p.Hashtags != null && p.Hashtags != ""
+                    && !authors.Contains(p.UserId)
+                    && !hidden.Contains(p.UserId))
+                .OrderByDescending(p => p.CreatedAt)
+                .Select(p => new { p.Id, p.Hashtags, When = p.ScheduledAt ?? p.CreatedAt })
+                .Take(window)
+                .ToListAsync();
+            taggedRows = candidates
+                .Where(p =>
+                {
+                    var blob = "," + (p.Hashtags ?? "").ToLowerInvariant() + ",";
+                    return needles.Any(blob.Contains);
+                })
+                .Select(p => (p.Id, p.When))
+                .ToList();
+        }
+
+        var merged = followedRows.Select(p => (p.Id, p.When)).Concat(taggedRows)
+            .GroupBy(p => p.Id)
+            .Select(g => g.First())
+            .OrderByDescending(p => p.When)
+            .Skip((page - 1) * limit)
+            .Take(limit + 1)
+            .ToList();
+        var hasMore = merged.Count > limit;
+        var pageIds = merged.Take(limit).Select(p => p.Id).ToList();
+        if (pageIds.Count == 0)
+            return Ok(new { items = Array.Empty<object>(), hasMore = false });
+
+        var savedIds = (await _db.SavedPosts.AsNoTracking()
+            .Where(s => s.UserId == me && pageIds.Contains(s.PostId))
+            .Select(s => s.PostId)
+            .ToListAsync()).ToHashSet();
+        var items = await LoadFeedCards(pageIds, me, savedIds);
+        return Ok(new { items, hasMore });
+    }
+
+    private async Task<List<object>> LoadFeedCards(List<Guid> pageIds, Guid me, HashSet<Guid> savedIds)
+    {
+        var posts = await _db.Posts.AsNoTracking()
+            .Where(p => pageIds.Contains(p.Id))
+            .Select(p => new
+            {
+                p.Id,
+                p.UserId,
+                p.Caption,
+                p.Hashtags,
+                p.Location,
+                p.Mentions,
+                p.CreatedAt,
+                p.ScheduledAt,
+                p.IsPinned,
+                p.IsArchived,
+                p.IsDraft,
+                p.PollQuestion,
+                p.RepostOfId,
+                Username = p.User.UserName,
+                FullName = p.User.FullName,
+                Avatar = p.User.AvatarUrl,
+                IsPrivate = p.User.IsPrivate
+            })
+            .ToListAsync();
+
+        var media = await _db.PostMedia.AsNoTracking()
+            .Where(m => pageIds.Contains(m.PostId))
+            .OrderBy(m => m.SortOrder)
+            .Select(m => new { m.PostId, m.Type, m.Url, m.Extension, m.Filter })
+            .ToListAsync();
+
+        var likes = await _db.PostLikes.AsNoTracking()
+            .Where(l => pageIds.Contains(l.PostId))
+            .Select(l => new
+            {
+                l.PostId,
+                l.UserId,
+                l.Reaction,
+                Username = l.User.UserName,
+                FullName = l.User.FullName,
+                Avatar = l.User.AvatarUrl
+            })
+            .ToListAsync();
+
+        var commentCounts = await _db.Comments.AsNoTracking()
+            .Where(c => pageIds.Contains(c.PostId))
+            .GroupBy(c => c.PostId)
+            .Select(g => new { PostId = g.Key, Count = g.Count() })
+            .ToListAsync();
+
+        var tags = await _db.PostTags.AsNoTracking()
+            .Where(t => pageIds.Contains(t.PostId))
+            .Select(t => new { t.PostId, t.UserId, Username = t.User.UserName, FullName = t.User.FullName, Avatar = t.User.AvatarUrl })
+            .ToListAsync();
+
+        var options = await _db.PollOptions.AsNoTracking()
+            .Where(o => pageIds.Contains(o.PostId))
+            .OrderBy(o => o.SortOrder)
+            .Select(o => new { o.Id, o.PostId, o.Text })
+            .ToListAsync();
+        var optionIds = options.Select(o => o.Id).ToList();
+        var votes = optionIds.Count == 0
+            ? new List<(Guid OptionId, Guid UserId)>()
+            : (await _db.PollVotes.AsNoTracking()
+                .Where(v => optionIds.Contains(v.OptionId))
+                .Select(v => new { v.OptionId, v.UserId })
+                .ToListAsync())
+                .Select(v => (v.OptionId, v.UserId))
+                .ToList();
+
+        var repostIds = posts.Where(p => p.RepostOfId.HasValue).Select(p => p.RepostOfId!.Value).Distinct().ToList();
+        var reposts = new List<(Guid Id, string Caption, string? Username, List<object> Media)>();
+        if (repostIds.Count > 0)
+        {
+            var rows = await _db.Posts.AsNoTracking()
+                .Where(p => repostIds.Contains(p.Id))
+                .Select(p => new { p.Id, p.Caption, Username = p.User.UserName })
+                .ToListAsync();
+            var repostMedia = await _db.PostMedia.AsNoTracking()
+                .Where(m => repostIds.Contains(m.PostId))
+                .OrderBy(m => m.SortOrder)
+                .Select(m => new { m.PostId, m.Type, m.Url })
+                .ToListAsync();
+            reposts = rows.Select(p => (
+                p.Id,
+                p.Caption,
+                Username: p.Username,
+                Media: repostMedia.Where(m => m.PostId == p.Id).Select(m => (object)new { m.Type, m.Url }).ToList()
+            )).ToList();
+        }
+
+        var order = pageIds.Select((id, index) => (id, index)).ToDictionary(x => x.id, x => x.index);
+        return posts.OrderBy(p => order[p.Id]).Select(p =>
+        {
+            var postLikes = likes.Where(l => l.PostId == p.Id).Select(l => new PostLike
+            {
+                PostId = l.PostId,
+                UserId = l.UserId,
+                Reaction = l.Reaction,
+                User = new AppUser { Id = l.UserId, UserName = l.Username, FullName = l.FullName ?? "", AvatarUrl = l.Avatar }
+            }).ToList();
+            var reactions = DtoMapper.SummarizeReactions(postLikes, me);
+            var pollOptions = options.Where(o => o.PostId == p.Id).ToList();
+            object? poll = null;
+            if (!string.IsNullOrWhiteSpace(p.PollQuestion))
+            {
+                var mine = pollOptions.FirstOrDefault(o => votes.Any(v => v.OptionId == o.Id && v.UserId == me));
+                poll = new
+                {
+                    question = p.PollQuestion,
+                    votedOptionId = mine?.Id.ToString(),
+                    options = pollOptions.Select(o => new
+                    {
+                        id = o.Id.ToString(),
+                        text = o.Text,
+                        count = votes.Count(v => v.OptionId == o.Id)
+                    })
+                };
+            }
+            var repost = p.RepostOfId.HasValue ? reposts.FirstOrDefault(r => r.Id == p.RepostOfId) : default;
+            return (object)new
+            {
+                id = p.Id.ToString(),
+                userId = p.UserId.ToString(),
+                media = media.Where(m => m.PostId == p.Id).Select(m => new { type = m.Type, url = m.Url, extension = m.Extension, filter = m.Filter }).ToList(),
+                caption = p.Caption,
+                hashtags = string.IsNullOrWhiteSpace(p.Hashtags) ? new List<string>() : p.Hashtags.Split(',').ToList(),
+                location = p.Location ?? "",
+                mentions = string.IsNullOrWhiteSpace(p.Mentions) ? new List<string>() : p.Mentions.Split(',').ToList(),
+                likes = postLikes.Select(x => x.UserId.ToString()).ToList(),
+                likeCount = reactions.ReactionCount,
+                commentCount = commentCounts.FirstOrDefault(c => c.PostId == p.Id)?.Count ?? 0,
+                liked = reactions.Liked,
+                myReaction = reactions.MyReaction,
+                reactionCount = reactions.ReactionCount,
+                reactions = reactions.Reactions,
+                saved = savedIds.Contains(p.Id),
+                createdAt = p.CreatedAt,
+                scheduledAt = p.ScheduledAt.HasValue ? DateTime.SpecifyKind(p.ScheduledAt.Value, DateTimeKind.Utc) : (DateTime?)null,
+                isPinned = p.IsPinned,
+                isArchived = p.IsArchived,
+                isDraft = p.IsDraft,
+                tags = tags.Where(t => t.PostId == p.Id).Select(t => new
+                {
+                    id = t.UserId.ToString(),
+                    username = t.Username,
+                    fullName = t.FullName,
+                    avatar = t.Avatar
+                }).ToList(),
+                poll,
+                repost = p.RepostOfId.HasValue && repost.Id != Guid.Empty ? new
+                {
+                    id = repost.Id.ToString(),
+                    caption = repost.Caption,
+                    user = new { username = repost.Username },
+                    media = repost.Media
+                } : null,
+                user = DtoMapper.MapUser(new AppUser
+                {
+                    Id = p.UserId,
+                    UserName = p.Username,
+                    FullName = p.FullName ?? "",
+                    AvatarUrl = p.Avatar,
+                    IsPrivate = p.IsPrivate,
+                    IsActive = true
+                })
+            };
+        }).ToList();
     }
 
     [AllowAnonymous]
@@ -76,10 +301,23 @@ public class PostsController : ControllerBase
         var muted = me.HasValue
             ? await _db.UserMutes.Where(m => m.UserId == me).Select(m => m.MutedId).ToListAsync()
             : new List<Guid>();
-        var items = await LivePosts().Where(p => !p.User.IsPrivate && !p.User.IsBanned && p.User.IsActive && !hidden.Contains(p.UserId) && !muted.Contains(p.UserId))
-            .OrderByDescending(p => p.Likes.Count).ToListAsync();
-        var savedIds = me.HasValue
-            ? (await _db.SavedPosts.Where(s => s.UserId == me.Value).Select(s => s.PostId).ToListAsync()).ToHashSet()
+        var now = DateTime.UtcNow;
+        var ids = await _db.Posts.AsNoTracking()
+            .Where(p => !p.IsDeleted && !p.IsArchived && !p.IsDraft
+                && (p.ScheduledAt == null || p.ScheduledAt <= now)
+                && !p.User.IsPrivate && !p.User.IsBanned && p.User.IsActive
+                && !hidden.Contains(p.UserId) && !muted.Contains(p.UserId))
+            .OrderByDescending(p => p.Likes.Count)
+            .Select(p => p.Id)
+            .Take(48)
+            .ToListAsync();
+        var loaded = ids.Count == 0
+            ? new List<Post>()
+            : await ReadPosts().Where(p => ids.Contains(p.Id)).ToListAsync();
+        var rank = ids.Select((id, index) => (id, index)).ToDictionary(x => x.id, x => x.index);
+        var items = loaded.OrderBy(p => rank[p.Id]).ToList();
+        var savedIds = me.HasValue && ids.Count > 0
+            ? (await _db.SavedPosts.AsNoTracking().Where(s => s.UserId == me.Value && ids.Contains(s.PostId)).Select(s => s.PostId).ToListAsync()).ToHashSet()
             : new HashSet<Guid>();
 
         var tags = items
@@ -214,7 +452,7 @@ public class PostsController : ControllerBase
             ["myReaction"] = reactions.MyReaction,
             ["reactionCount"] = reactions.ReactionCount,
             ["reactions"] = reactions.Reactions,
-            ["saved"] = me.HasValue && _db.SavedPosts.Any(x => x.PostId == post.Id && x.UserId == me),
+            ["saved"] = me.HasValue && await _db.SavedPosts.AnyAsync(x => x.PostId == post.Id && x.UserId == me),
             ["createdAt"] = post.CreatedAt,
             ["scheduledAt"] = post.ScheduledAt.HasValue ? DateTime.SpecifyKind(post.ScheduledAt.Value, DateTimeKind.Utc) : null,
             ["isPinned"] = post.IsPinned,
@@ -438,10 +676,11 @@ public class PostsController : ControllerBase
         var ids = saved.Select(x => x.PostId).ToList();
         var posts = await LivePosts().Where(p => ids.Contains(p.Id)).ToListAsync();
         var map = posts.ToDictionary(p => p.Id);
+        var savedIds = ids.ToHashSet();
         var collections = await _db.Collections.Include(c => c.Items).Where(c => c.UserId == me).ToListAsync();
         return Ok(new
         {
-            posts = ids.Where(id => map.ContainsKey(id)).Select(id => DtoMapper.MapPost(map[id], me, _db)),
+            posts = ids.Where(id => map.ContainsKey(id)).Select(id => DtoMapper.MapPost(map[id], me, _db, savedIds)),
             collections = collections.Select(c => new
             {
                 id = c.Id.ToString(),
@@ -459,13 +698,15 @@ public class PostsController : ControllerBase
         var ids = likeRows.Select(x => x.PostId).ToList();
         var posts = await LivePosts().Where(p => ids.Contains(p.Id)).ToListAsync();
         var map = posts.ToDictionary(p => p.Id);
-        var reels = await _db.Reels.Include(r => r.User).Include(r => r.Likes)
-            .Where(r => r.Likes.Any(l => l.UserId == me))
+        var savedIds = (await _db.SavedPosts.AsNoTracking().Where(s => s.UserId == me && ids.Contains(s.PostId)).Select(s => s.PostId).ToListAsync()).ToHashSet();
+        var reelIds = await _db.ReelLikes.AsNoTracking().Where(l => l.UserId == me).Select(l => l.ReelId).Distinct().ToListAsync();
+        var reels = await _db.Reels.AsNoTracking().Include(r => r.User)
+            .Where(r => reelIds.Contains(r.Id))
             .OrderByDescending(r => r.CreatedAt)
             .ToListAsync();
         return Ok(new
         {
-            posts = ids.Where(id => map.ContainsKey(id)).Select(id => DtoMapper.MapPost(map[id], me, _db)),
+            posts = ids.Where(id => map.ContainsKey(id)).Select(id => DtoMapper.MapPost(map[id], me, _db, savedIds)),
             reels = reels.Select(r => new
             {
                 id = r.Id.ToString(),

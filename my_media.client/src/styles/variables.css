@@ -1,0 +1,58 @@
+:root {
+  --bg: #f4f5f7;
+  --bg-elevated: #ffffff;
+  --bg-hover: #eef0f3;
+  --surface: #f7f8fa;
+  --border: #e3e6eb;
+  --text: #12151a;
+  --text-secondary: #5c6570;
+  --accent: #0c6b66;
+  --accent-hover: #095751;
+  --accent-strong: #0c6b66;
+  --accent-soft: #e7f4f3;
+  --on-accent: #ffffff;
+  --danger: #c4352d;
+  --like: #e11d48;
+  --success: #157a45;
+  --warning: #8a5a12;
+  --warning-soft: #fff6e5;
+  --warning-border: #f2c14e;
+  --story-ring: linear-gradient(135deg, #0c6b66 0%, #14b8a6 52%, #e8b15a 100%);
+  --font: "Manrope", "Segoe UI", sans-serif;
+  --logo: "Fraunces", "Times New Roman", serif;
+  --nav-width: 244px;
+  --radius: 16px;
+  --radius-sm: 12px;
+  --shadow-sm: 0 1px 2px rgba(18, 21, 26, 0.04), 0 8px 24px rgba(18, 21, 26, 0.05);
+  --shadow: 0 12px 40px rgba(18, 21, 26, 0.1);
+  color-scheme: light;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --bg: #0e1116;
+  --bg-elevated: #171b22;
+  --bg-hover: #232833;
+  --surface: #1d222b;
+  --border: #2d3441;
+  --text: #f4f6f8;
+  --text-secondary: #a7b0bc;
+  --accent: #5eead4;
+  --accent-hover: #99f6e4;
+  --accent-strong: #0f766e;
+  --accent-soft: #132e2c;
+  --on-accent: #f0fdfa;
+  --danger: #f87171;
+  --like: #fb7185;
+  --success: #4ade80;
+  --warning: #f6d48a;
+  --warning-soft: #3a2e16;
+  --warning-border: #8a6a2f;
+  --story-ring: linear-gradient(135deg, #0f766e 0%, #2dd4bf 55%, #e8b15a 100%);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28), 0 10px 28px rgba(0, 0, 0, 0.22);
+  --shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+  color-scheme: dark;
+}

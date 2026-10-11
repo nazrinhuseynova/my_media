@@ -9,4 +9,7 @@ public class ReelComment : BaseEntity
     public Guid UserId { get; set; }
     public AppUser User { get; set; } = null!;
     public string Text { get; set; } = string.Empty;
+    public Guid? ParentId { get; set; }
+    public ReelComment? Parent { get; set; }
+    public ICollection<ReelCommentLike> Likes { get; set; } = new List<ReelCommentLike>();
 }

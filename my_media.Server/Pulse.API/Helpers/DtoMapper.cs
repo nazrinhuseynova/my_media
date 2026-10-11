@@ -39,9 +39,7 @@ public static class DtoMapper
 
     public static object MapPost(Post p, Guid? viewerId, AppDbContext db, HashSet<Guid>? savedIds = null)
     {
-        var saved = savedIds != null
-            ? savedIds.Contains(p.Id)
-            : viewerId.HasValue && db.SavedPosts.Any(x => x.PostId == p.Id && x.UserId == viewerId);
+        var saved = savedIds != null && savedIds.Contains(p.Id);
         var reactions = SummarizeReactions(p.Likes, viewerId);
         return new
         {
@@ -111,6 +109,9 @@ public static class DtoMapper
         => SummarizeRows(likes?.Select(x => (x.UserId, x.Reaction, x.User)), viewerId);
 
     public static ReactionSummary SummarizeReactions(IEnumerable<ReelLike>? likes, Guid? viewerId)
+        => SummarizeRows(likes?.Select(x => (x.UserId, x.Reaction, x.User)), viewerId);
+
+    public static ReactionSummary SummarizeReactions(IEnumerable<ReelCommentLike>? likes, Guid? viewerId)
         => SummarizeRows(likes?.Select(x => (x.UserId, x.Reaction, x.User)), viewerId);
 
     private static ReactionSummary SummarizeRows(IEnumerable<(Guid UserId, string? Reaction, AppUser? User)>? rows, Guid? viewerId)
