@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/frontend/">
+    <File Path="frontend/package.json" />
+  </Folder>
+  <Project Path="Pulse.API/Pulse.API.csproj" />
+  <Project Path="Pulse.Application/Pulse.Application.csproj" />
+  <Project Path="Pulse.Domain/Pulse.Domain.csproj" />
+  <Project Path="Pulse.Infrastructure/Pulse.Infrastructure.csproj" />
+</Solution>

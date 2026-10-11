@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="my_media.client/Pulse.client.esproj">
+    <Build />
+    <Deploy />
+  </Project>
+  <Project Path="my_media.Server/Pulse.Server.csproj" />
+</Solution>
