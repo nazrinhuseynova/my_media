@@ -28,7 +28,7 @@ public class AdminController : ControllerBase
         {
             users = await _users.Users.CountAsync(),
             posts = await _db.Posts.CountAsync(p => !p.IsDeleted),
-            reels = await _db.Reels.CountAsync(),
+            reels = await _db.Reels.CountAsync(r => !r.IsDeleted),
             reports = await _db.Reports.CountAsync(),
             activeUsers = await _users.Users.CountAsync(u => u.IsActive && !u.IsBanned)
         });
@@ -62,6 +62,7 @@ public class AdminController : ControllerBase
         if (user == null) return NotFound();
         user.IsBanned = !user.IsBanned;
         await _users.UpdateAsync(user);
+        await DropSessions(user);
         return Ok(DtoMapper.MapUser(user, await DtoMapper.GetRole(_users, user)));
     }
 
@@ -107,7 +108,7 @@ public class AdminController : ControllerBase
                 relatedUserId = reel?.UserId;
                 if (action == "remove" && reel != null)
                 {
-                    _db.Reels.Remove(reel);
+                    reel.IsDeleted = true;
                 }
             }
             else if (report.TargetType == "user")
@@ -123,6 +124,7 @@ public class AdminController : ControllerBase
             {
                 user.IsBanned = true;
                 await _users.UpdateAsync(user);
+                await DropSessions(user);
             }
         }
 
@@ -134,6 +136,19 @@ public class AdminController : ControllerBase
             report.TargetType,
             report.TargetId
         });
+    }
+
+    private async Task DropSessions(AppUser user)
+    {
+        await _users.UpdateSecurityStampAsync(user);
+        var rows = await _db.RefreshTokens.Where(t => t.UserId == user.Id && !t.IsRevoked && !t.IsDeleted).ToListAsync();
+        var now = DateTime.UtcNow;
+        foreach (var row in rows)
+        {
+            row.IsRevoked = true;
+            row.RevokedAt = now;
+        }
+        if (rows.Count > 0) await _db.SaveChangesAsync();
     }
 }
 

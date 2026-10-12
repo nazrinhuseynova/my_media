@@ -22,18 +22,23 @@ public static class MentionHelper
             return;
         }
 
-        var names = MentionRx.Matches(text)
+        foreach (var name in Names(text))
+        {
+            var user = await db.Users.FirstOrDefaultAsync(u => u.NormalizedUserName == name.ToUpperInvariant() || u.UserName == name);
+            if (user == null) continue;
+            var blocked = await db.Blocks.AnyAsync(b =>
+                (b.BlockerId == fromId && b.BlockedId == user.Id) || (b.BlockerId == user.Id && b.BlockedId == fromId));
+            if (blocked) continue;
+            await notes.AddAsync(user.Id, fromId, "mention", entityId, message);
+        }
+    }
+
+    public static List<string> Names(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return new List<string>();
+        return MentionRx.Matches(text)
             .Select(m => m.Groups[1].Value)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-
-        foreach (var name in names)
-        {
-            var user = await db.Users.FirstOrDefaultAsync(u => u.NormalizedUserName == name.ToUpperInvariant() || u.UserName == name);
-            if (user != null)
-            {
-                await notes.AddAsync(user.Id, fromId, "mention", entityId, message);
-            }
-        }
     }
 }

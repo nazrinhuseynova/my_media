@@ -11,6 +11,7 @@ public class Post : BaseEntity
     public string Mentions { get; set; } = string.Empty;
     public string Hashtags { get; set; } = string.Empty;
     public DateTime? ScheduledAt { get; set; }
+    public bool MentionsSent { get; set; }
     public bool IsPinned { get; set; }
     public bool IsArchived { get; set; }
     public bool IsDraft { get; set; }

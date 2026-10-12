@@ -27,30 +27,83 @@ public class ReelsController : ControllerBase
 
     [AllowAnonymous]
     [HttpGet("/api/reels")]
-    public async Task<IActionResult> List()
+    public async Task<IActionResult> List([FromQuery] int page = 1, [FromQuery] int pageSize = 8, [FromQuery] Guid? focus = null)
     {
+        var paging = Paging.Normalize(page, pageSize, 8, 20);
         Guid? me = User.Identity?.IsAuthenticated == true ? DtoMapper.GetUserId(User) : null;
         var hidden = new List<Guid>();
-        var savedIds = new List<Guid>();
         var followed = new List<Guid>();
         if (me.HasValue)
         {
             var viewer = me.Value;
-            hidden = await _db.Blocks.Where(b => b.BlockerId == viewer || b.BlockedId == viewer)
+            hidden = await _db.Blocks.AsNoTracking().Where(b => b.BlockerId == viewer || b.BlockedId == viewer)
                 .Select(b => b.BlockerId == viewer ? b.BlockedId : b.BlockerId).ToListAsync();
-            savedIds = await _db.SavedReels.Where(s => s.UserId == viewer).Select(s => s.ReelId).ToListAsync();
-            followed = await _db.Follows.Where(f => f.FollowerId == viewer).Select(f => f.FollowingId).ToListAsync();
-            hidden.AddRange(await _db.UserMutes.Where(m => m.UserId == viewer).Select(m => m.MutedId).ToListAsync());
+            followed = await _db.Follows.AsNoTracking().Where(f => f.FollowerId == viewer).Select(f => f.FollowingId).ToListAsync();
+            hidden.AddRange(await _db.UserMutes.AsNoTracking().Where(m => m.UserId == viewer).Select(m => m.MutedId).ToListAsync());
         }
         var viewerId = me ?? Guid.Empty;
-        var items = await _db.Reels.Include(r => r.User).Include(r => r.Likes).ThenInclude(l => l.User).Include(r => r.Comments)
-            .Where(r => !hidden.Contains(r.UserId) && r.User.IsActive && !r.User.IsBanned
-                && (!r.User.IsPrivate || r.UserId == viewerId || followed.Contains(r.UserId)))
-            .OrderByDescending(r => r.CreatedAt).ToListAsync();
-        return Ok(items.Select(r =>
+        var query = _db.Reels.AsNoTracking()
+            .Where(r => !r.IsDeleted && !hidden.Contains(r.UserId) && r.User.IsActive && !r.User.IsBanned
+                && (!r.User.IsPrivate || r.UserId == viewerId || followed.Contains(r.UserId)));
+        var total = await query.CountAsync();
+        var rows = await query
+            .OrderByDescending(r => r.CreatedAt)
+            .Skip((paging.Page - 1) * paging.PageSize)
+            .Take(paging.PageSize)
+            .Select(r => new
+            {
+                r.Id,
+                r.UserId,
+                r.VideoUrl,
+                r.VideoExtension,
+                r.Caption,
+                r.Music,
+                r.Effect,
+                r.CreatedAt,
+                LikeCount = r.Likes.Count(),
+                CommentCount = r.Comments.Count(),
+                Username = r.User.UserName,
+                FullName = r.User.FullName,
+                Avatar = r.User.AvatarUrl,
+                IsPrivate = r.User.IsPrivate,
+                IsOnline = r.User.IsOnline
+            })
+            .ToListAsync();
+        if (focus.HasValue && rows.All(r => r.Id != focus.Value))
         {
-            var reactions = DtoMapper.SummarizeReactions(r.Likes, me);
-            return new
+            var extra = await query.Where(r => r.Id == focus.Value)
+                .Select(r => new
+                {
+                    r.Id,
+                    r.UserId,
+                    r.VideoUrl,
+                    r.VideoExtension,
+                    r.Caption,
+                    r.Music,
+                    r.Effect,
+                    r.CreatedAt,
+                    LikeCount = r.Likes.Count(),
+                    CommentCount = r.Comments.Count(),
+                    Username = r.User.UserName,
+                    FullName = r.User.FullName,
+                    Avatar = r.User.AvatarUrl,
+                    IsPrivate = r.User.IsPrivate,
+                    IsOnline = r.User.IsOnline
+                })
+                .FirstOrDefaultAsync();
+            if (extra != null) rows.Insert(0, extra);
+        }
+        var ids = rows.Select(r => r.Id).ToList();
+        var mine = me.HasValue && ids.Count > 0
+            ? await _db.ReelLikes.AsNoTracking().Where(l => l.UserId == me && ids.Contains(l.ReelId)).ToListAsync()
+            : new List<ReelLike>();
+        var savedIds = me.HasValue && ids.Count > 0
+            ? (await _db.SavedReels.AsNoTracking().Where(s => s.UserId == me && ids.Contains(s.ReelId)).Select(s => s.ReelId).ToListAsync()).ToHashSet()
+            : new HashSet<Guid>();
+        var items = rows.Select(r =>
+        {
+            var my = mine.FirstOrDefault(l => l.ReelId == r.Id);
+            return (object)new
             {
                 id = r.Id.ToString(),
                 userId = r.UserId.ToString(),
@@ -59,18 +112,26 @@ public class ReelsController : ControllerBase
                 caption = r.Caption,
                 music = r.Music,
                 effect = r.Effect,
-                likes = r.Likes.Select(l => l.UserId.ToString()),
-                likeCount = reactions.LikeCount,
-                commentCount = r.Comments.Count,
-                liked = reactions.Liked,
-                myReaction = reactions.MyReaction,
-                reactionCount = reactions.ReactionCount,
-                reactions = reactions.Reactions,
+                likeCount = r.LikeCount,
+                commentCount = r.CommentCount,
+                liked = my != null,
+                myReaction = my?.Reaction ?? "",
+                reactionCount = r.LikeCount,
                 saved = savedIds.Contains(r.Id),
                 createdAt = r.CreatedAt,
-                user = DtoMapper.MapUser(r.User)
+                user = DtoMapper.MapUser(new AppUser
+                {
+                    Id = r.UserId,
+                    UserName = r.Username,
+                    FullName = r.FullName ?? "",
+                    AvatarUrl = r.Avatar,
+                    IsPrivate = r.IsPrivate,
+                    IsOnline = r.IsOnline,
+                    IsActive = true
+                })
             };
-        }));
+        }).ToList();
+        return Ok(PagedResult<object>.Create(items, paging.Page, paging.PageSize, total));
     }
 
     [HttpPost("/api/reels")]
@@ -78,6 +139,7 @@ public class ReelsController : ControllerBase
     {
         var me = DtoMapper.GetUserId(User);
         var (videoUrl, videoExtension) = await StoredMedia.ResolveAsync(_files, body.VideoUrl, body.VideoExtension, "videos");
+        if (string.IsNullOrWhiteSpace(videoUrl)) return BadRequest(new { message = "Video lazimdir" });
         var reel = new Reel
         {
             UserId = me,
@@ -121,6 +183,12 @@ public class ReelsController : ControllerBase
         var c = new ReelComment { ReelId = id, UserId = me, Text = text, ParentId = parent, Likes = new List<ReelCommentLike>() };
         _db.ReelComments.Add(c);
         await _db.SaveChangesAsync();
+        if (parent.HasValue)
+        {
+            var parentAuthor = await _db.ReelComments.AsNoTracking().Where(x => x.Id == parent).Select(x => x.UserId).FirstOrDefaultAsync();
+            if (parentAuthor != Guid.Empty && parentAuthor != me && parentAuthor != reel.UserId)
+                await _notes.AddAsync(parentAuthor, me, "comment", id.ToString(), "reel şərhinə cavab yazdı");
+        }
         if (reel.UserId != me)
             await _notes.AddAsync(reel.UserId, me, "comment", id.ToString(), parent.HasValue ? "reel şərhinə cavab yazdı" : "reelinə şərh yazdı");
         await MentionHelper.NotifyAsync(_db, _notes, me, text, id.ToString(), "Seni reel serhinde isareledi");
@@ -172,7 +240,8 @@ public class ReelsController : ControllerBase
         var me = DtoMapper.GetUserId(User);
         var comment = await _db.ReelComments.FindAsync(id);
         if (comment == null) return NotFound();
-        if (comment.UserId != me && !User.IsInRole("Admin")) return StatusCode(403, new { message = "Silmek olmaz" });
+        var reelOwner = await _db.Reels.Where(r => r.Id == comment.ReelId).Select(r => r.UserId).FirstOrDefaultAsync();
+        if (comment.UserId != me && reelOwner != me && !User.IsInRole("Admin")) return StatusCode(403, new { message = "Silmek olmaz" });
         var family = await _db.ReelComments.Where(c => c.ReelId == comment.ReelId).ToListAsync();
         var drop = new List<ReelComment>();
         void Collect(Guid root)
@@ -258,8 +327,21 @@ public class ReelsController : ControllerBase
         };
     }
 
+    [HttpDelete("/api/reels/{id:guid}")]
+    public async Task<IActionResult> Remove(Guid id)
+    {
+        var me = DtoMapper.GetUserId(User);
+        var reel = await _db.Reels.FirstOrDefaultAsync(r => r.Id == id && !r.IsDeleted);
+        if (reel == null) return NotFound();
+        if (reel.UserId != me && !User.IsInRole("Admin")) return StatusCode(403, new { message = "Silmek olmaz" });
+        reel.IsDeleted = true;
+        await _db.SaveChangesAsync();
+        return Ok(new { message = "Silindi" });
+    }
+
     private async Task<bool> CanSeeReel(Reel reel, Guid? me)
     {
+        if (reel.IsDeleted) return false;
         var owner = reel.User ?? await _db.Users.FindAsync(reel.UserId);
         if (owner == null || !owner.IsActive || owner.IsBanned) return false;
         if (me.HasValue && reel.UserId == me.Value) return true;

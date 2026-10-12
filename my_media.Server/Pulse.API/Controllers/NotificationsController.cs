@@ -20,13 +20,24 @@ public class NotificationsController : ControllerBase
     }
 
     [HttpGet("/api/notifications")]
-    public async Task<IActionResult> List()
+    public async Task<IActionResult> List([FromQuery] int page = 1, [FromQuery] int pageSize = 20)
     {
+        var paging = Paging.Normalize(page, pageSize, 20, 50);
         var me = DtoMapper.GetUserId(User);
-        var items = await _db.Notifications.Where(n => n.UserId == me).OrderByDescending(n => n.CreatedAt).ToListAsync();
+        var blocked = await _db.Blocks.AsNoTracking()
+            .Where(b => b.BlockerId == me || b.BlockedId == me)
+            .Select(b => b.BlockerId == me ? b.BlockedId : b.BlockerId)
+            .ToListAsync();
+        var query = _db.Notifications.AsNoTracking().Where(n => n.UserId == me && (n.FromId == null || !blocked.Contains(n.FromId.Value)));
+        var total = await query.CountAsync();
+        var items = await query
+            .OrderByDescending(n => n.CreatedAt)
+            .Skip((paging.Page - 1) * paging.PageSize)
+            .Take(paging.PageSize)
+            .ToListAsync();
         var fromIds = items.Where(n => n.FromId.HasValue).Select(n => n.FromId!.Value).Distinct().ToList();
-        var fromUsers = await _db.Users.Where(u => fromIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id);
-        return Ok(items.Select(n =>
+        var fromUsers = await _db.Users.AsNoTracking().Where(u => fromIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id);
+        var mapped = items.Select(n =>
         {
             object? actor = n.FromId.HasValue && fromUsers.TryGetValue(n.FromId.Value, out var u)
                 ? DtoMapper.MapUser(u)
@@ -44,16 +55,16 @@ public class NotificationsController : ControllerBase
                 Read = n.IsRead,
                 CreatedAt = n.CreatedAt
             };
-        }));
+        }).ToList();
+        return Ok(PagedResult<NotificationOut>.Create(mapped, paging.Page, paging.PageSize, total));
     }
 
     [HttpPost("/api/notifications/read")]
     public async Task<IActionResult> Read()
     {
         var me = DtoMapper.GetUserId(User);
-        var items = await _db.Notifications.Where(n => n.UserId == me).ToListAsync();
-        items.ForEach(n => n.IsRead = true);
-        await _db.SaveChangesAsync();
+        await _db.Notifications.Where(n => n.UserId == me && !n.IsRead)
+            .ExecuteUpdateAsync(s => s.SetProperty(n => n.IsRead, true));
         return Ok(new { message = "Oxundu" });
     }
 

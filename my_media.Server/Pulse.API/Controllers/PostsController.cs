@@ -77,28 +77,22 @@ public class PostsController : ControllerBase
 
         var tags = await _db.HashtagFollows.AsNoTracking().Where(h => h.UserId == me).Select(h => h.Tag).ToListAsync();
         var taggedRows = new List<(Guid Id, DateTime When)>();
-        if (tags.Count > 0)
+        foreach (var tag in tags.Select(t => t.Trim().TrimStart('#').ToLowerInvariant()).Where(t => t.Length > 0).Distinct())
         {
-            var needles = tags.Select(t => "," + t.ToLowerInvariant() + ",").ToList();
-            var candidates = await _db.Posts.AsNoTracking()
+            var needle = "," + tag + ",";
+            var rows = await _db.Posts.AsNoTracking()
                 .Where(p => !p.IsDeleted && !p.IsArchived && !p.IsDraft
                     && (p.ScheduledAt == null || p.ScheduledAt <= now)
                     && !p.User.IsPrivate && p.User.IsActive && !p.User.IsBanned
                     && p.Hashtags != null && p.Hashtags != ""
                     && !authors.Contains(p.UserId)
-                    && !hidden.Contains(p.UserId))
-                .OrderByDescending(p => p.CreatedAt)
-                .Select(p => new { p.Id, p.Hashtags, When = p.ScheduledAt ?? p.CreatedAt })
+                    && !hidden.Contains(p.UserId)
+                    && ("," + p.Hashtags.ToLower() + ",").Contains(needle))
+                .OrderByDescending(p => p.ScheduledAt ?? p.CreatedAt)
+                .Select(p => new { p.Id, When = p.ScheduledAt ?? p.CreatedAt })
                 .Take(window)
                 .ToListAsync();
-            taggedRows = candidates
-                .Where(p =>
-                {
-                    var blob = "," + (p.Hashtags ?? "").ToLowerInvariant() + ",";
-                    return needles.Any(blob.Contains);
-                })
-                .Select(p => (p.Id, p.When))
-                .ToList();
+            taggedRows.AddRange(rows.Select(p => (p.Id, p.When)));
         }
 
         var merged = followedRows.Select(p => (p.Id, p.When)).Concat(taggedRows)
@@ -110,15 +104,21 @@ public class PostsController : ControllerBase
             .ToList();
         var hasMore = merged.Count > limit;
         var pageIds = merged.Take(limit).Select(p => p.Id).ToList();
+        var total = await _db.Posts.AsNoTracking()
+            .Where(p => !p.IsDeleted && !p.IsArchived && !p.IsDraft
+                && (p.ScheduledAt == null || p.ScheduledAt <= now)
+                && authors.Contains(p.UserId)
+                && p.User.IsActive && !p.User.IsBanned)
+            .CountAsync();
         if (pageIds.Count == 0)
-            return Ok(new { items = Array.Empty<object>(), hasMore = false });
+            return Ok(PagedResult<object>.Create(new List<object>(), page, limit, total, false));
 
         var savedIds = (await _db.SavedPosts.AsNoTracking()
             .Where(s => s.UserId == me && pageIds.Contains(s.PostId))
             .Select(s => s.PostId)
             .ToListAsync()).ToHashSet();
         var items = await LoadFeedCards(pageIds, me, savedIds);
-        return Ok(new { items, hasMore });
+        return Ok(PagedResult<object>.Create(items, page, limit, Math.Max(total, (page - 1) * limit + items.Count), hasMore));
     }
 
     private async Task<List<object>> LoadFeedCards(List<Guid> pageIds, Guid me, HashSet<Guid> savedIds)
@@ -198,14 +198,31 @@ public class PostsController : ControllerBase
         {
             var rows = await _db.Posts.AsNoTracking()
                 .Where(p => repostIds.Contains(p.Id))
-                .Select(p => new { p.Id, p.Caption, Username = p.User.UserName })
+                .Select(p => new
+                {
+                    p.Id,
+                    p.Caption,
+                    p.UserId,
+                    p.IsDeleted,
+                    p.IsArchived,
+                    p.IsDraft,
+                    p.ScheduledAt,
+                    IsPrivate = p.User.IsPrivate,
+                    Active = p.User.IsActive,
+                    Banned = p.User.IsBanned,
+                    Username = p.User.UserName
+                })
                 .ToListAsync();
             var repostMedia = await _db.PostMedia.AsNoTracking()
                 .Where(m => repostIds.Contains(m.PostId))
                 .OrderBy(m => m.SortOrder)
                 .Select(m => new { m.PostId, m.Type, m.Url })
                 .ToListAsync();
-            reposts = rows.Select(p => (
+            var now = DateTime.UtcNow;
+            reposts = rows.Where(p => !p.IsDeleted && !p.IsArchived && !p.IsDraft && p.Active && !p.Banned
+                    && (p.ScheduledAt == null || p.ScheduledAt <= now || p.UserId == me)
+                    && (!p.IsPrivate || p.UserId == me))
+                .Select(p => (
                 p.Id,
                 p.Caption,
                 Username: p.Username,
@@ -294,40 +311,34 @@ public class PostsController : ControllerBase
 
     [AllowAnonymous]
     [HttpGet("/api/explore")]
-    public async Task<IActionResult> Explore()
+    public async Task<IActionResult> Explore([FromQuery] int page = 1, [FromQuery] int pageSize = 12)
     {
+        var paging = Paging.Normalize(page, pageSize, 12, 24);
         Guid? me = User.Identity?.IsAuthenticated == true ? DtoMapper.GetUserId(User) : null;
         var hidden = me.HasValue ? await HiddenUserIds(me.Value) : new List<Guid>();
         var muted = me.HasValue
-            ? await _db.UserMutes.Where(m => m.UserId == me).Select(m => m.MutedId).ToListAsync()
+            ? await _db.UserMutes.AsNoTracking().Where(m => m.UserId == me).Select(m => m.MutedId).ToListAsync()
             : new List<Guid>();
         var now = DateTime.UtcNow;
-        var ids = await _db.Posts.AsNoTracking()
+        var query = _db.Posts.AsNoTracking()
             .Where(p => !p.IsDeleted && !p.IsArchived && !p.IsDraft
                 && (p.ScheduledAt == null || p.ScheduledAt <= now)
                 && !p.User.IsPrivate && !p.User.IsBanned && p.User.IsActive
-                && !hidden.Contains(p.UserId) && !muted.Contains(p.UserId))
-            .OrderByDescending(p => p.Likes.Count)
+                && !hidden.Contains(p.UserId) && !muted.Contains(p.UserId));
+        var total = await query.CountAsync();
+        var ids = await query
+            .OrderByDescending(p => p.CreatedAt)
             .Select(p => p.Id)
-            .Take(48)
+            .Skip((paging.Page - 1) * paging.PageSize)
+            .Take(paging.PageSize)
             .ToListAsync();
-        var loaded = ids.Count == 0
-            ? new List<Post>()
-            : await ReadPosts().Where(p => ids.Contains(p.Id)).ToListAsync();
-        var rank = ids.Select((id, index) => (id, index)).ToDictionary(x => x.id, x => x.index);
-        var items = loaded.OrderBy(p => rank[p.Id]).ToList();
         var savedIds = me.HasValue && ids.Count > 0
             ? (await _db.SavedPosts.AsNoTracking().Where(s => s.UserId == me.Value && ids.Contains(s.PostId)).Select(s => s.PostId).ToListAsync()).ToHashSet()
             : new HashSet<Guid>();
-
-        var tags = items
-            .SelectMany(p => (p.Hashtags ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries))
-            .GroupBy(t => t)
-            .Select(g => new { name = g.Key, count = g.Count() })
-            .OrderByDescending(x => x.count)
-            .ToList();
-
-        return Ok(new { items = items.Select(p => DtoMapper.MapPost(p, me, _db, savedIds)).ToList(), trending = tags });
+        var items = ids.Count == 0
+            ? new List<object>()
+            : await LoadFeedCards(ids, me ?? Guid.Empty, savedIds);
+        return Ok(PagedResult<object>.Create(items, paging.Page, paging.PageSize, total));
     }
 
     [HttpPost("/api/posts")]
@@ -349,7 +360,7 @@ public class PostsController : ControllerBase
             var source = await _db.Posts.Include(p => p.User).FirstOrDefaultAsync(p => p.Id == body.RepostOfId && !p.IsDeleted);
             if (source == null || source.IsDraft || source.IsArchived || !IsLive(source) || !await CanSee(source, me))
                 return BadRequest(new { message = "Bu paylasimi yeniden paylasmaq olmaz" });
-            if (source.User.IsPrivate && source.UserId != me)
+            if (source.User.IsPrivate)
                 return BadRequest(new { message = "Gizli paylasimi yeniden paylasmaq olmaz" });
         }
 
@@ -372,6 +383,7 @@ public class PostsController : ControllerBase
             Mentions = body.Mentions != null ? string.Join(',', body.Mentions) : "",
             Hashtags = ExtractTags(body.Caption ?? ""),
             ScheduledAt = scheduled,
+            MentionsSent = false,
             IsDraft = isDraft,
             PollQuestion = hasPoll ? body.Poll!.Question.Trim() : "",
             RepostOfId = body.RepostOfId
@@ -420,6 +432,8 @@ public class PostsController : ControllerBase
             {
                 await MentionHelper.NotifyAsync(_db, _notes, me, string.Join(" ", body.Mentions.Select(x => x.StartsWith("@") ? x : "@" + x)), post.Id.ToString(), "Seni paylasimda isareledi");
             }
+            post.MentionsSent = true;
+            await _db.SaveChangesAsync();
         }
         await _db.Entry(post).Reference(x => x.User).LoadAsync();
         return StatusCode(201, DtoMapper.MapPost(post, me, _db));
@@ -460,13 +474,13 @@ public class PostsController : ControllerBase
             ["isDraft"] = post.IsDraft,
             ["tags"] = post.Tags.Where(t => t.User != null).Select(t => new { id = t.UserId.ToString(), username = t.User.UserName, fullName = t.User.FullName, avatar = t.User.AvatarUrl }),
             ["poll"] = DtoMapper.MapPoll(post, me),
-            ["repost"] = post.RepostOf == null ? null : new
+            ["repost"] = DtoMapper.ShowNested(post.RepostOf, me) ? new
             {
-                id = post.RepostOf.Id.ToString(),
+                id = post.RepostOf!.Id.ToString(),
                 caption = post.RepostOf.Caption,
                 user = post.RepostOf.User == null ? null : DtoMapper.MapUser(post.RepostOf.User),
                 media = post.RepostOf.Media.OrderBy(m => m.SortOrder).Select(m => new { type = m.Type, url = m.Url })
-            },
+            } : null,
             ["user"] = DtoMapper.MapUser(post.User),
             ["comments"] = comments.Select(c => MapComment(c, me))
         });
@@ -490,6 +504,7 @@ public class PostsController : ControllerBase
         var me = DtoMapper.GetUserId(User);
         var post = await PostsQuery().FirstOrDefaultAsync(p => p.Id == id);
         if (post == null || post.UserId != me) return StatusCode(403, new { message = "Redakte icazesi yoxdur" });
+        var previousCaption = post.Caption;
         post.Caption = body.Caption ?? post.Caption;
         post.Location = body.Location ?? post.Location;
         post.Hashtags = ExtractTags(post.Caption);
@@ -509,6 +524,20 @@ public class PostsController : ControllerBase
             post.IsDraft = false;
             post.IsArchived = false;
             post.ScheduledAt = null;
+            if (!post.MentionsSent)
+            {
+                await MentionHelper.NotifyAsync(_db, _notes, me, post.Caption, post.Id.ToString(), "Seni paylasimda isareledi");
+                if (!string.IsNullOrWhiteSpace(post.Mentions))
+                    await MentionHelper.NotifyAsync(_db, _notes, me, string.Join(" ", post.Mentions.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(x => x.StartsWith("@") ? x : "@" + x)), post.Id.ToString(), "Seni paylasimda isareledi");
+                post.MentionsSent = true;
+            }
+        }
+        else if (body.Caption != null && post.MentionsSent && !post.IsDraft && IsLive(post))
+        {
+            var known = MentionHelper.Names(previousCaption).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var added = MentionHelper.Names(post.Caption).Where(name => !known.Contains(name)).ToList();
+            if (added.Count > 0)
+                await MentionHelper.NotifyAsync(_db, _notes, me, string.Join(" ", added.Select(name => "@" + name)), post.Id.ToString(), "Seni paylasimda isareledi");
         }
         await _db.SaveChangesAsync();
         return Ok(DtoMapper.MapPost(post, me, _db));
@@ -592,8 +621,14 @@ public class PostsController : ControllerBase
         var c = new Comment { PostId = id, UserId = me, Text = text, ParentId = parent };
         _db.Comments.Add(c);
         await _db.SaveChangesAsync();
+        if (parent.HasValue)
+        {
+            var parentAuthor = await _db.Comments.AsNoTracking().Where(x => x.Id == parent).Select(x => x.UserId).FirstOrDefaultAsync();
+            if (parentAuthor != Guid.Empty && parentAuthor != me && parentAuthor != post.UserId)
+                await _notes.AddAsync(parentAuthor, me, "comment", id.ToString(), "şərhinə cavab yazdı");
+        }
         if (post.UserId != me)
-            await _notes.AddAsync(post.UserId, me, "comment", id.ToString(), "şərh yazdı");
+            await _notes.AddAsync(post.UserId, me, "comment", id.ToString(), parent.HasValue ? "şərhinə cavab yazdı" : "şərh yazdı");
         await MentionHelper.NotifyAsync(_db, _notes, me, text, id.ToString(), "Seni serhde isareledi");
         var user = await _db.Users.FindAsync(me);
         c.User = user!;
@@ -647,7 +682,8 @@ public class PostsController : ControllerBase
         var me = DtoMapper.GetUserId(User);
         var comment = await _db.Comments.FindAsync(id);
         if (comment == null) return NotFound();
-        if (comment.UserId != me && !User.IsInRole("Admin")) return StatusCode(403, new { message = "Silmek olmaz" });
+        var postOwner = await _db.Posts.Where(p => p.Id == comment.PostId).Select(p => p.UserId).FirstOrDefaultAsync();
+        if (comment.UserId != me && postOwner != me && !User.IsInRole("Admin")) return StatusCode(403, new { message = "Silmek olmaz" });
         var family = await _db.Comments.Where(c => c.PostId == comment.PostId).ToListAsync();
         var drop = new List<Comment>();
         void Collect(Guid root)
@@ -669,18 +705,32 @@ public class PostsController : ControllerBase
     }
 
     [HttpGet("/api/saved")]
-    public async Task<IActionResult> Saved()
+    public async Task<IActionResult> Saved([FromQuery] int page = 1, [FromQuery] int pageSize = 12)
     {
+        var paging = Paging.Normalize(page, pageSize, 12, 24);
         var me = DtoMapper.GetUserId(User);
-        var saved = await _db.SavedPosts.Where(x => x.UserId == me).OrderByDescending(x => x.CreatedAt).ToListAsync();
-        var ids = saved.Select(x => x.PostId).ToList();
-        var posts = await LivePosts().Where(p => ids.Contains(p.Id)).ToListAsync();
-        var map = posts.ToDictionary(p => p.Id);
-        var savedIds = ids.ToHashSet();
-        var collections = await _db.Collections.Include(c => c.Items).Where(c => c.UserId == me).ToListAsync();
+        var now = DateTime.UtcNow;
+        var savedQuery = _db.SavedPosts.AsNoTracking().Where(x => x.UserId == me
+            && _db.Posts.Any(p => p.Id == x.PostId && !p.IsDeleted && !p.IsArchived && !p.IsDraft
+                && (p.ScheduledAt == null || p.ScheduledAt <= now)));
+        var total = await savedQuery.CountAsync();
+        var ids = await savedQuery
+            .OrderByDescending(x => x.CreatedAt)
+            .Skip((paging.Page - 1) * paging.PageSize)
+            .Take(paging.PageSize)
+            .Select(x => x.PostId)
+            .ToListAsync();
+        var posts = await LoadFeedCards(ids, me, ids.ToHashSet());
+        var paged = PagedResult<object>.Create(posts, paging.Page, paging.PageSize, total);
+        var collections = await _db.Collections.AsNoTracking().Include(c => c.Items).Where(c => c.UserId == me).ToListAsync();
         return Ok(new
         {
-            posts = ids.Where(id => map.ContainsKey(id)).Select(id => DtoMapper.MapPost(map[id], me, _db, savedIds)),
+            posts = paged.Items,
+            page = paged.Page,
+            pageSize = paged.PageSize,
+            totalCount = paged.TotalCount,
+            totalPages = paged.TotalPages,
+            hasMore = paged.HasMore,
             collections = collections.Select(c => new
             {
                 id = c.Id.ToString(),
@@ -691,31 +741,57 @@ public class PostsController : ControllerBase
     }
 
     [HttpGet("/api/liked")]
-    public async Task<IActionResult> Liked()
+    public async Task<IActionResult> Liked([FromQuery] int page = 1, [FromQuery] int pageSize = 12)
     {
+        var paging = Paging.Normalize(page, pageSize, 12, 24);
         var me = DtoMapper.GetUserId(User);
-        var likeRows = await _db.PostLikes.Where(x => x.UserId == me).OrderByDescending(x => x.CreatedAt).ToListAsync();
-        var ids = likeRows.Select(x => x.PostId).ToList();
-        var posts = await LivePosts().Where(p => ids.Contains(p.Id)).ToListAsync();
-        var map = posts.ToDictionary(p => p.Id);
-        var savedIds = (await _db.SavedPosts.AsNoTracking().Where(s => s.UserId == me && ids.Contains(s.PostId)).Select(s => s.PostId).ToListAsync()).ToHashSet();
-        var reelIds = await _db.ReelLikes.AsNoTracking().Where(l => l.UserId == me).Select(l => l.ReelId).Distinct().ToListAsync();
-        var reels = await _db.Reels.AsNoTracking().Include(r => r.User)
-            .Where(r => reelIds.Contains(r.Id))
-            .OrderByDescending(r => r.CreatedAt)
+        var now = DateTime.UtcNow;
+        var likeQuery = _db.PostLikes.AsNoTracking().Where(x => x.UserId == me
+            && _db.Posts.Any(p => p.Id == x.PostId && !p.IsDeleted && !p.IsArchived && !p.IsDraft
+                && (p.ScheduledAt == null || p.ScheduledAt <= now)));
+        var postTotal = await likeQuery.CountAsync();
+        var ids = await likeQuery
+            .OrderByDescending(x => x.CreatedAt)
+            .Skip((paging.Page - 1) * paging.PageSize)
+            .Take(paging.PageSize)
+            .Select(x => x.PostId)
             .ToListAsync();
-        return Ok(new
-        {
-            posts = ids.Where(id => map.ContainsKey(id)).Select(id => DtoMapper.MapPost(map[id], me, _db, savedIds)),
-            reels = reels.Select(r => new
+        var savedIds = ids.Count == 0
+            ? new HashSet<Guid>()
+            : (await _db.SavedPosts.AsNoTracking().Where(s => s.UserId == me && ids.Contains(s.PostId)).Select(s => s.PostId).ToListAsync()).ToHashSet();
+        var posts = await LoadFeedCards(ids, me, savedIds);
+        var reelQuery = _db.ReelLikes.AsNoTracking().Where(l => l.UserId == me
+            && _db.Reels.Any(r => r.Id == l.ReelId && !r.IsDeleted));
+        var reelTotal = await reelQuery.Select(l => l.ReelId).Distinct().CountAsync();
+        var reelIds = await reelQuery
+            .GroupBy(l => l.ReelId)
+            .OrderByDescending(g => g.Max(l => l.CreatedAt))
+            .Select(g => g.Key)
+            .Skip((paging.Page - 1) * paging.PageSize)
+            .Take(paging.PageSize)
+            .ToListAsync();
+        var reels = await _db.Reels.AsNoTracking()
+            .Where(r => reelIds.Contains(r.Id) && !r.IsDeleted)
+            .Select(r => new
             {
                 id = r.Id.ToString(),
                 kind = "reel",
                 videoUrl = r.VideoUrl,
                 videoExtension = r.VideoExtension,
                 caption = r.Caption,
-                user = DtoMapper.MapUser(r.User)
+                createdAt = r.CreatedAt,
+                user = new { id = r.UserId.ToString(), username = r.User.UserName, fullName = r.User.FullName, avatar = r.User.AvatarUrl }
             })
+            .ToListAsync();
+        var postPage = PagedResult<object>.Create(posts, paging.Page, paging.PageSize, postTotal);
+        return Ok(new
+        {
+            posts = postPage.Items,
+            reels,
+            page = paging.Page,
+            pageSize = paging.PageSize,
+            totalCount = postTotal + reelTotal,
+            hasMore = postPage.HasMore || paging.Page * paging.PageSize < reelTotal
         });
     }
 
@@ -737,9 +813,21 @@ public class PostsController : ControllerBase
         var me = DtoMapper.GetUserId(User);
         var col = await _db.Collections.Include(c => c.Items).FirstOrDefaultAsync(c => c.Id == id && c.UserId == me);
         if (col == null) return NotFound(new { message = "Kolleksiya tapilmadi" });
-        var type = string.IsNullOrWhiteSpace(body.Type) ? "post" : body.Type;
+        var type = string.Equals(body.Type, "reel", StringComparison.OrdinalIgnoreCase) ? "reel" : "post";
         var itemId = (body.Id ?? "").Trim();
-        if (itemId.Length == 0) return BadRequest(new { message = "Paylasim secilmedi" });
+        if (!Guid.TryParse(itemId, out var itemGuid)) return BadRequest(new { message = "Paylasim secilmedi" });
+        if (type == "reel")
+        {
+            var reel = await _db.Reels.AsNoTracking().Include(r => r.User).FirstOrDefaultAsync(r => r.Id == itemGuid && !r.IsDeleted);
+            if (reel?.User == null || !reel.User.IsActive || reel.User.IsBanned) return BadRequest(new { message = "Paylasim tapilmadi" });
+            if (reel.User.IsPrivate && reel.UserId != me && !await _db.Follows.AnyAsync(f => f.FollowerId == me && f.FollowingId == reel.UserId))
+                return BadRequest(new { message = "Paylasim tapilmadi" });
+        }
+        else
+        {
+            var target = await _db.Posts.AsNoTracking().Include(p => p.User).FirstOrDefaultAsync(p => p.Id == itemGuid);
+            if (target == null || !await CanSee(target, me)) return BadRequest(new { message = "Paylasim tapilmadi" });
+        }
         if (col.Items.Any(i => i.Type == type && i.ItemId == itemId))
         {
             return Ok(new { id = col.Id.ToString(), name = col.Name, items = col.Items.Select(i => new { i.Type, id = i.ItemId }) });
@@ -779,19 +867,31 @@ public class PostsController : ControllerBase
     }
 
     [HttpGet("/api/posts/drafts")]
-    public async Task<IActionResult> Drafts()
-    {
-        var me = DtoMapper.GetUserId(User);
-        var posts = await PostsQuery().Where(p => p.UserId == me && p.IsDraft && !p.IsArchived).OrderByDescending(p => p.CreatedAt).ToListAsync();
-        return Ok(posts.Select(p => DtoMapper.MapPost(p, me, _db)));
-    }
+    public Task<IActionResult> Drafts([FromQuery] int page = 1, [FromQuery] int pageSize = 12)
+        => PageOwnPosts(page, pageSize, draft: true);
 
     [HttpGet("/api/posts/archived")]
-    public async Task<IActionResult> Archived()
+    public Task<IActionResult> Archived([FromQuery] int page = 1, [FromQuery] int pageSize = 12)
+        => PageOwnPosts(page, pageSize, draft: false);
+
+    private async Task<IActionResult> PageOwnPosts(int page, int pageSize, bool draft)
     {
+        var paging = Paging.Normalize(page, pageSize, 12, 24);
         var me = DtoMapper.GetUserId(User);
-        var posts = await PostsQuery().Where(p => p.UserId == me && p.IsArchived).OrderByDescending(p => p.CreatedAt).ToListAsync();
-        return Ok(posts.Select(p => DtoMapper.MapPost(p, me, _db)));
+        var query = _db.Posts.AsNoTracking().Where(p => p.UserId == me && !p.IsDeleted && (draft ? p.IsDraft && !p.IsArchived : p.IsArchived));
+        var total = await query.CountAsync();
+        var ids = await query
+            .OrderByDescending(p => p.CreatedAt)
+            .Skip((paging.Page - 1) * paging.PageSize)
+            .Take(paging.PageSize)
+            .Select(p => p.Id)
+            .ToListAsync();
+        var loaded = ids.Count == 0
+            ? new List<Post>()
+            : await PostsQuery().Where(p => ids.Contains(p.Id)).ToListAsync();
+        var rank = ids.Select((id, index) => (id, index)).ToDictionary(x => x.id, x => x.index);
+        var items = loaded.OrderBy(p => rank[p.Id]).Select(p => DtoMapper.MapPost(p, me, _db)).ToList();
+        return Ok(PagedResult<object>.Create(items, paging.Page, paging.PageSize, total));
     }
 
     [HttpPost("/api/posts/{id:guid}/pin")]
@@ -826,16 +926,18 @@ public class PostsController : ControllerBase
         var me = DtoMapper.GetUserId(User);
         var source = await _db.Posts.Include(p => p.User).FirstOrDefaultAsync(p => p.Id == id && !p.IsDeleted);
         if (source == null || source.IsDraft || source.IsArchived || !IsLive(source) || !await CanSee(source, me)) return NotFound();
-        if (source.User.IsPrivate && source.UserId != me) return BadRequest(new { message = "Gizli paylasimi yeniden paylasmaq olmaz" });
+        if (source.User.IsPrivate) return BadRequest(new { message = "Gizli paylasimi yeniden paylasmaq olmaz" });
         var post = new Post
         {
             UserId = me,
             Caption = body?.Caption ?? "",
             RepostOfId = source.RepostOfId ?? source.Id,
-            Hashtags = ExtractTags(body?.Caption ?? "")
+            Hashtags = ExtractTags(body?.Caption ?? ""),
+            MentionsSent = true
         };
         _db.Posts.Add(post);
         await _db.SaveChangesAsync();
+        await MentionHelper.NotifyAsync(_db, _notes, me, post.Caption, post.Id.ToString(), "Seni paylasimda isareledi");
         return StatusCode(201, new { id = post.Id.ToString() });
     }
 
@@ -867,7 +969,20 @@ public class PostsController : ControllerBase
     public async Task<IActionResult> Report([FromBody] ReportBody body)
     {
         var me = DtoMapper.GetUserId(User);
-        _db.Reports.Add(new Report { FromId = me, TargetType = body.TargetType, TargetId = body.TargetId, Reason = body.Reason });
+        var type = (body.TargetType ?? "").Trim().ToLowerInvariant();
+        var reason = (body.Reason ?? "").Trim();
+        if (reason.Length == 0 || !Guid.TryParse(body.TargetId, out var targetId))
+            return BadRequest(new { message = "Sikayet melumati natamamdir" });
+        var exists = type switch
+        {
+            "post" => await _db.Posts.AnyAsync(p => p.Id == targetId && !p.IsDeleted),
+            "reel" => await _db.Reels.AnyAsync(r => r.Id == targetId && !r.IsDeleted),
+            "user" => await _db.Users.AnyAsync(u => u.Id == targetId && u.IsActive && !u.IsBanned),
+            "comment" => await _db.Comments.AnyAsync(c => c.Id == targetId),
+            _ => false
+        };
+        if (!exists) return BadRequest(new { message = "Sikayet olunan tapilmadi" });
+        _db.Reports.Add(new Report { FromId = me, TargetType = type, TargetId = targetId.ToString(), Reason = reason });
         await _db.SaveChangesAsync();
         return Ok(new { message = "Sikayet gonderildi" });
     }

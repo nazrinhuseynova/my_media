@@ -36,7 +36,7 @@ public class StoriesController : ControllerBase
         var muted = await _db.UserMutes.Where(m => m.UserId == me).Select(m => m.MutedId).ToListAsync();
         var hidden = await HiddenUserIds(me);
         var stories = await _db.Stories.Include(s => s.User).Include(s => s.Views)
-            .Where(s => following.Contains(s.UserId) && s.CreatedAt >= from)
+            .Where(s => following.Contains(s.UserId) && s.CreatedAt >= from && s.User.IsActive && !s.User.IsBanned)
             .Where(s => !muted.Contains(s.UserId) && !hidden.Contains(s.UserId))
             .Where(s => s.Audience != "close" || s.UserId == me || closeIds.Contains(s.UserId))
             .ToListAsync();
@@ -61,7 +61,7 @@ public class StoriesController : ControllerBase
                     viewers = s.UserId == me ? s.Views.Select(v => v.UserId.ToString()).ToList() : new List<string>(),
                     createdAt = DateTime.SpecifyKind(s.CreatedAt, DateTimeKind.Utc)
                 }).ToList(),
-                seen = g.Key == me || g.Any(s => s.Views.Any(v => v.UserId == me)),
+                seen = g.Key == me || g.All(s => s.Views.Any(v => v.UserId == me)),
                 latest = g.Max(s => s.CreatedAt),
                 isMe = g.Key == me
             };
@@ -80,6 +80,7 @@ public class StoriesController : ControllerBase
         var mediaType = body.MediaType ?? "image";
         var (mediaUrl, mediaExtension) = await StoredMedia.ResolveAsync(
             _files, body.MediaUrl, body.MediaExtension, mediaType == "video" ? "videos" : "images");
+        if (string.IsNullOrWhiteSpace(mediaUrl)) return BadRequest(new { message = "Sekil ve ya video lazimdir" });
         var story = new Story
         {
             UserId = me,
@@ -176,6 +177,7 @@ public class StoriesController : ControllerBase
         var user = await _db.Users.FirstOrDefaultAsync(u => u.UserName == username);
         if (user == null) return NotFound();
         Guid? me = User.Identity?.IsAuthenticated == true ? DtoMapper.GetUserId(User) : null;
+        if ((user.IsBanned || !user.IsActive) && me != user.Id) return NotFound();
         if (me != user.Id)
         {
             if (me.HasValue && await _db.Blocks.AnyAsync(b =>
@@ -217,6 +219,8 @@ public class StoriesController : ControllerBase
     {
         if (story.UserId == me) return true;
         if (story.CreatedAt < DateTime.UtcNow.AddHours(-24)) return false;
+        var owner = story.User ?? await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == story.UserId);
+        if (owner == null || !owner.IsActive || owner.IsBanned) return false;
         if (await _db.Blocks.AnyAsync(b =>
                 (b.BlockerId == me && b.BlockedId == story.UserId) || (b.BlockerId == story.UserId && b.BlockedId == me)))
             return false;
