@@ -14,4 +14,6 @@ public class Message : BaseEntity
     public string MediaExtension { get; set; } = string.Empty;
     public string? SharedPostId { get; set; }
     public string ReadBy { get; set; } = string.Empty;
+    public string HiddenFor { get; set; } = string.Empty;
+    public Guid? ReplyToId { get; set; }
 }

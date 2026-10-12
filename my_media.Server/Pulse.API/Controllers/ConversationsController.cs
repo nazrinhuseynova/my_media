@@ -38,15 +38,31 @@ public class ConversationsController : ControllerBase
     {
         var me = DtoMapper.GetUserId(User);
         var convs = await _db.Conversations
+            .AsNoTracking()
             .Include(c => c.Members).ThenInclude(m => m.User)
-            .Include(c => c.Messages)
             .Where(c => c.Members.Any(m => m.UserId == me))
             .OrderByDescending(c => c.UpdatedAtValue)
             .ToListAsync();
+        var blocked = (await _db.Blocks.AsNoTracking()
+            .Where(b => b.BlockerId == me || b.BlockedId == me)
+            .Select(b => b.BlockerId == me ? b.BlockedId : b.BlockerId)
+            .ToListAsync()).ToHashSet();
+        convs = convs.Where(c => c.IsGroup || c.Members.All(m => m.UserId == me || !blocked.Contains(m.UserId))).ToList();
+        var convIds = convs.Select(c => c.Id).ToList();
+        var meText = me.ToString();
+        var lastByConv = convIds.Count == 0
+            ? new Dictionary<Guid, Message>()
+            : (await _db.Messages.AsNoTracking()
+                .Where(m => convIds.Contains(m.ConversationId)
+                    && (m.HiddenFor == null || m.HiddenFor == "" || !m.HiddenFor.Contains(meText)))
+                .GroupBy(m => m.ConversationId)
+                .Select(g => g.OrderByDescending(m => m.CreatedAt).First())
+                .ToListAsync())
+                .ToDictionary(m => m.ConversationId);
 
         return Ok(convs.Select(c =>
         {
-            var last = c.Messages.OrderBy(m => m.CreatedAt).LastOrDefault();
+            lastByConv.TryGetValue(c.Id, out var last);
             return new
             {
                 id = c.Id.ToString(),
@@ -81,6 +97,12 @@ public class ConversationsController : ControllerBase
         {
             return BadRequest(new { message = "En az bir istifadeci secin" });
         }
+        var found = await _db.Users.AsNoTracking()
+            .Where(u => others.Contains(u.Id) && u.IsActive && !u.IsBanned)
+            .Select(u => u.Id)
+            .ToListAsync();
+        if (found.Count != others.Count)
+            return BadRequest(new { message = "Istifadeci tapilmadi" });
 
         var ids = rawIds;
         var isGroup = ids.Count > 2 || body.IsGroup;
@@ -109,12 +131,25 @@ public class ConversationsController : ControllerBase
     }
 
     [HttpGet("{id:guid}/messages")]
-    public async Task<IActionResult> Messages(Guid id)
+    public async Task<IActionResult> Messages(Guid id, [FromQuery] int page = 1, [FromQuery] int pageSize = 40)
     {
+        var paging = Paging.Normalize(page, pageSize, 40, 80);
         var me = DtoMapper.GetUserId(User);
-        if (!await InConversation(id, me)) return NotFound();
-        var items = await _db.Messages.Include(m => m.Sender)
-            .Where(m => m.ConversationId == id).OrderBy(m => m.CreatedAt).ToListAsync();
+        var closed = await ClosedDirect(id, me);
+        if (closed == null) return NotFound();
+        if (closed == true) return StatusCode(403, new { message = "Bu profil baglidir" });
+        var meText = me.ToString();
+        var query = _db.Messages.Where(m => m.ConversationId == id
+            && (m.HiddenFor == null || m.HiddenFor == "" || !m.HiddenFor.Contains(meText)));
+        var total = await query.CountAsync();
+        var items = (await query.Include(m => m.Sender)
+            .OrderByDescending(m => m.CreatedAt)
+            .Skip((paging.Page - 1) * paging.PageSize)
+            .Take(paging.PageSize)
+            .ToListAsync())
+            .Where(m => !HiddenFrom(m, me))
+            .OrderBy(m => m.CreatedAt)
+            .ToList();
 
         var marked = false;
         foreach (var m in items)
@@ -131,21 +166,8 @@ public class ConversationsController : ControllerBase
         if (marked)
             await _hub.Clients.Group(id.ToString()).SendAsync("messagesRead", new { conversationId = id.ToString(), userId = me.ToString() });
 
-        return Ok(items.Select(m => new
-        {
-            id = m.Id.ToString(),
-            conversationId = m.ConversationId.ToString(),
-            senderId = m.SenderId.ToString(),
-            type = m.Type,
-            text = m.IsDeleted ? "Mesaj silindi" : m.Text,
-            deleted = m.IsDeleted,
-            mediaUrl = m.IsDeleted ? "" : m.MediaUrl ?? "",
-            mediaExtension = m.MediaExtension,
-            sharedPostId = m.SharedPostId ?? "",
-            createdAt = m.CreatedAt,
-            readBy = (m.ReadBy ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries),
-            sender = DtoMapper.MapUser(m.Sender)
-        }));
+        var pageItems = items.Select(m => MapMessage(m, items)).ToList();
+        return Ok(PagedResult<object>.Create(pageItems, paging.Page, paging.PageSize, total));
     }
 
     [HttpPost("{id:guid}/messages")]
@@ -154,23 +176,30 @@ public class ConversationsController : ControllerBase
         var me = DtoMapper.GetUserId(User);
         var conv = await _db.Conversations.Include(c => c.Members).FirstOrDefaultAsync(c => c.Id == id);
         if (conv == null || conv.Members.All(m => m.UserId != me)) return NotFound();
+        if (!conv.IsGroup && await IsBlocked(me, conv.Members.Select(m => m.UserId)))
+            return StatusCode(403, new { message = "Bu profil baglidir" });
         var others = conv.Members.Select(m => m.UserId).Where(x => x != me).ToList();
         if (await _db.Blocks.AnyAsync(b =>
                 (b.BlockerId == me && others.Contains(b.BlockedId)) || (b.BlockedId == me && others.Contains(b.BlockerId))))
             return StatusCode(403, new { message = "Bu profil baglidir" });
         var type = body.Type ?? "text";
+        var text = (body.Text ?? "").Trim();
         var folder = type == "video" ? "videos" : type == "audio" ? "audio" : "images";
         var (mediaUrl, mediaExtension) = await StoredMedia.ResolveAsync(_files, body.MediaUrl, body.MediaExtension, folder);
+        var shared = await SharedPost(me, body.SharedPostId);
+        if (text.Length == 0 && string.IsNullOrWhiteSpace(mediaUrl) && shared == null)
+            return BadRequest(new { message = "Mesaj yaz" });
         var msg = new Message
         {
             ConversationId = id,
             SenderId = me,
             Type = type,
-            Text = body.Text ?? "",
+            Text = text,
             MediaUrl = string.IsNullOrWhiteSpace(mediaUrl) ? null : mediaUrl,
             MediaExtension = mediaExtension,
-            SharedPostId = body.SharedPostId,
-            ReadBy = me.ToString()
+            SharedPostId = shared,
+            ReadBy = me.ToString(),
+            ReplyToId = await ReplyInConversation(id, body.ReplyToId)
         };
         _db.Messages.Add(msg);
         conv.UpdatedAtValue = DateTime.UtcNow;
@@ -182,42 +211,63 @@ public class ConversationsController : ControllerBase
             await _notes.AddAsync(member.UserId, me, "dm", id.ToString(), $"{meUser!.UserName} mesaj gonderdi");
         }
 
-        await _hub.Clients.Group(id.ToString()).SendAsync("message", new
-        {
-            id = msg.Id.ToString(),
-            conversationId = id.ToString(),
-            senderId = me.ToString(),
-            type = msg.Type,
-            text = msg.Text,
-            mediaUrl = msg.MediaUrl ?? "",
-            mediaExtension = msg.MediaExtension,
-            sharedPostId = msg.SharedPostId ?? "",
-            createdAt = msg.CreatedAt,
-            readBy = new[] { me.ToString() },
-            sender = DtoMapper.MapUser(meUser!)
-        });
+        var saved = await _db.Messages.Include(m => m.Sender).FirstAsync(m => m.Id == msg.Id);
+        var reply = saved.ReplyToId == null
+            ? null
+            : await _db.Messages.Include(m => m.Sender).FirstOrDefaultAsync(m => m.Id == saved.ReplyToId && m.ConversationId == id);
+        var payload = MapMessage(saved, reply == null ? new[] { saved } : new[] { saved, reply });
+        await _hub.Clients.Group(id.ToString()).SendAsync("message", payload);
+        return StatusCode(201, payload);
+    }
 
-        return StatusCode(201, new
+    [HttpPatch("{id:guid}/messages/{messageId:guid}")]
+    public async Task<IActionResult> EditMessage(Guid id, Guid messageId, [FromBody] EditMsgBody body)
+    {
+        var me = DtoMapper.GetUserId(User);
+        var closed = await ClosedDirect(id, me);
+        if (closed == null) return NotFound();
+        if (closed == true) return StatusCode(403, new { message = "Bu profil baglidir" });
+        var msg = await _db.Messages.Include(m => m.Sender).FirstOrDefaultAsync(m => m.Id == messageId && m.ConversationId == id && m.SenderId == me && !m.IsDeleted);
+        if (msg == null) return NotFound();
+        var text = (body.Text ?? "").Trim();
+        if (text.Length == 0) return BadRequest(new { message = "Mətn yazın" });
+        msg.Text = text;
+        msg.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        var reply = msg.ReplyToId == null
+            ? null
+            : await _db.Messages.Include(m => m.Sender).FirstOrDefaultAsync(m => m.Id == msg.ReplyToId && m.ConversationId == id);
+        var payload = MapMessage(msg, reply == null ? new[] { msg } : new[] { msg, reply });
+        await _hub.Clients.Group(id.ToString()).SendAsync("messageEdited", payload);
+        return Ok(payload);
+    }
+
+    [HttpPost("{id:guid}/messages/{messageId:guid}/hide")]
+    public async Task<IActionResult> HideMessage(Guid id, Guid messageId)
+    {
+        var me = DtoMapper.GetUserId(User);
+        var closed = await ClosedDirect(id, me);
+        if (closed == null) return NotFound();
+        if (closed == true) return StatusCode(403, new { message = "Bu profil baglidir" });
+        var msg = await _db.Messages.FirstOrDefaultAsync(m => m.Id == messageId && m.ConversationId == id);
+        if (msg == null) return NotFound();
+        var parts = (msg.HiddenFor ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries).ToList();
+        if (!parts.Contains(me.ToString()))
         {
-            id = msg.Id.ToString(),
-            conversationId = id.ToString(),
-            senderId = me.ToString(),
-            type = msg.Type,
-            text = msg.Text,
-            mediaUrl = msg.MediaUrl ?? "",
-            mediaExtension = msg.MediaExtension,
-            sharedPostId = msg.SharedPostId ?? "",
-            createdAt = msg.CreatedAt,
-            readBy = new[] { me.ToString() },
-            sender = DtoMapper.MapUser(meUser!)
-        });
+            parts.Add(me.ToString());
+            msg.HiddenFor = string.Join(',', parts);
+            await _db.SaveChangesAsync();
+        }
+        return Ok(new { hidden = true });
     }
 
     [HttpDelete("{id:guid}/messages/{messageId:guid}")]
     public async Task<IActionResult> RemoveMessage(Guid id, Guid messageId)
     {
         var me = DtoMapper.GetUserId(User);
-        if (!await InConversation(id, me)) return NotFound();
+        var closed = await ClosedDirect(id, me);
+        if (closed == null) return NotFound();
+        if (closed == true) return StatusCode(403, new { message = "Bu profil baglidir" });
         var msg = await _db.Messages.FirstOrDefaultAsync(m => m.Id == messageId && m.ConversationId == id && m.SenderId == me);
         if (msg == null) return NotFound();
         msg.IsDeleted = true;
@@ -232,13 +282,80 @@ public class ConversationsController : ControllerBase
     public async Task<IActionResult> Typing(Guid id)
     {
         var me = DtoMapper.GetUserId(User);
-        if (!await InConversation(id, me)) return NotFound();
+        var closed = await ClosedDirect(id, me);
+        if (closed == null) return NotFound();
+        if (closed == true) return StatusCode(403, new { message = "Bu profil baglidir" });
         await _hub.Clients.Group(id.ToString()).SendAsync("typing", new { conversationId = id.ToString(), userId = me });
         return Ok(new { ok = true });
     }
 
     private Task<bool> InConversation(Guid id, Guid me)
         => _db.Conversations.AnyAsync(c => c.Id == id && c.Members.Any(m => m.UserId == me));
+
+    private async Task<bool?> ClosedDirect(Guid id, Guid me)
+    {
+        var conv = await _db.Conversations.AsNoTracking().Include(c => c.Members).FirstOrDefaultAsync(c => c.Id == id);
+        if (conv == null || conv.Members.All(m => m.UserId != me)) return null;
+        if (conv.IsGroup) return false;
+        return await IsBlocked(me, conv.Members.Select(m => m.UserId));
+    }
+
+    private Task<bool> IsBlocked(Guid me, IEnumerable<Guid> memberIds)
+    {
+        var others = memberIds.Where(x => x != me).ToList();
+        return _db.Blocks.AnyAsync(b =>
+            (b.BlockerId == me && others.Contains(b.BlockedId)) || (b.BlockedId == me && others.Contains(b.BlockerId)));
+    }
+
+    private async Task<string?> SharedPost(Guid me, string? raw)
+    {
+        if (!Guid.TryParse(raw, out var postId)) return null;
+        var post = await _db.Posts.AsNoTracking().Include(p => p.User).FirstOrDefaultAsync(p => p.Id == postId);
+        if (post == null || post.IsDeleted || post.IsArchived || post.IsDraft) return null;
+        if (post.ScheduledAt != null && post.ScheduledAt > DateTime.UtcNow && post.UserId != me) return null;
+        if (post.User != null && (post.User.IsBanned || !post.User.IsActive) && post.UserId != me) return null;
+        if (post.UserId != me && await _db.Blocks.AnyAsync(b =>
+                (b.BlockerId == me && b.BlockedId == post.UserId) || (b.BlockerId == post.UserId && b.BlockedId == me)))
+            return null;
+        if (post.User?.IsPrivate == true && post.UserId != me
+            && !await _db.Follows.AnyAsync(f => f.FollowerId == me && f.FollowingId == post.UserId))
+            return null;
+        return post.Id.ToString();
+    }
+
+    private async Task<Guid?> ReplyInConversation(Guid conversationId, string? raw)
+    {
+        if (!Guid.TryParse(raw, out var replyId)) return null;
+        var exists = await _db.Messages.AnyAsync(m => m.Id == replyId && m.ConversationId == conversationId);
+        return exists ? replyId : null;
+    }
+
+    private static bool HiddenFrom(Message message, Guid me)
+        => ("," + (message.HiddenFor ?? "") + ",").Contains("," + me + ",", StringComparison.OrdinalIgnoreCase);
+
+    private static object MapMessage(Message m, IEnumerable<Message> thread)
+    {
+        var reply = m.ReplyToId == null ? null : thread.FirstOrDefault(x => x.Id == m.ReplyToId);
+        return new
+        {
+            id = m.Id.ToString(),
+            conversationId = m.ConversationId.ToString(),
+            senderId = m.SenderId.ToString(),
+            type = m.Type,
+            text = m.IsDeleted ? "Mesaj silindi" : m.Text,
+            deleted = m.IsDeleted,
+            edited = m.UpdatedAt != null && !m.IsDeleted,
+            mediaUrl = m.IsDeleted ? "" : m.MediaUrl ?? "",
+            mediaExtension = m.MediaExtension,
+            sharedPostId = m.SharedPostId ?? "",
+            createdAt = m.CreatedAt,
+            readBy = (m.ReadBy ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries),
+            replyToId = m.ReplyToId?.ToString() ?? "",
+            replyText = reply == null ? "" : (reply.IsDeleted ? "Mesaj silindi" : reply.Text),
+            replyUser = reply?.Sender?.UserName ?? "",
+            sender = m.Sender == null ? null : DtoMapper.MapUser(m.Sender)
+        };
+    }
 }
 
 public class NewConvBody
@@ -255,4 +372,10 @@ public class SendMsgBody
     public string? MediaUrl { get; set; }
     public string? MediaExtension { get; set; }
     public string? SharedPostId { get; set; }
+    public string? ReplyToId { get; set; }
+}
+
+public class EditMsgBody
+{
+    public string? Text { get; set; }
 }

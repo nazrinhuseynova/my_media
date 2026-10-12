@@ -78,6 +78,12 @@ public class ChatHub : Hub
     {
         if (!Guid.TryParse(conversationId, out var id)) return false;
         var me = GetUserId();
-        return await _db.ConversationMembers.AnyAsync(m => m.ConversationId == id && m.UserId == me);
+        var conv = await _db.Conversations.AsNoTracking().Include(c => c.Members).FirstOrDefaultAsync(c => c.Id == id);
+        if (conv == null || conv.Members.All(m => m.UserId != me)) return false;
+        if (conv.IsGroup) return true;
+        var others = conv.Members.Select(m => m.UserId).Where(x => x != me).ToList();
+        var blocked = await _db.Blocks.AnyAsync(b =>
+            (b.BlockerId == me && others.Contains(b.BlockedId)) || (b.BlockedId == me && others.Contains(b.BlockerId)));
+        return !blocked;
     }
 }
