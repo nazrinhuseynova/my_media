@@ -37,7 +37,6 @@ if (!fs.existsSync(certFilePath) || !fs.existsSync(keyFilePath)) {
 const devPort = parseInt(env.DEV_SERVER_PORT || '53464');
 const apiTarget = 'http://localhost:5017';
 
-// https://vitejs.dev/config/
 export default defineConfig(({ command }) => ({
     plugins: [plugin()],
     define: {
