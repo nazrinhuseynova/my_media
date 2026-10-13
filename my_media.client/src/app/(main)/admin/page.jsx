@@ -3,6 +3,7 @@ import { api } from "../../../services/api";
 import { useAuthStore } from "../../../features/auth/store/useAuthStore";
 import Button from "../../../components/ui/Button";
 import AdminGuard from "../../../features/admin/components/AdminGuard";
+import { notify } from "../../../stores/useNoticeStore";
 
 export default function AdminPage() {
   const me = useAuthStore((s) => s.user);
@@ -46,7 +47,7 @@ export default function AdminPage() {
                 <td>{u.username}</td>
                 <td>{u.role}</td>
                 <td>{u.isBanned ? "dayandırılıb" : u.isActive ? "aktiv" : "deaktiv"}</td>
-                <td><Button variant="danger" onClick={async () => { const n = await api.post(`/api/admin/users/${u.id}/ban`); setUsers(users.map((x) => x.id === n.id ? n : x)); }}>{u.isBanned ? "Aç" : "Blokla"}</Button></td>
+                <td><Button variant="danger" onClick={async () => { const n = await api.post(`/api/admin/users/${u.id}/ban`); setUsers(users.map((x) => x.id === n.id ? n : x)); notify(n.isBanned ? "Hesab bloklandı" : "Hesab açıldı"); }}>{u.isBanned ? "Aç" : "Blokla"}</Button></td>
               </tr>
             ))}
           </tbody>
@@ -60,7 +61,7 @@ export default function AdminPage() {
               <tr key={p.id}>
                 <td>{p.caption}</td>
                 <td>{p.user?.username}</td>
-                <td><Button variant="danger" onClick={async () => { await api.delete(`/api/posts/${p.id}`); setPosts(posts.filter((x) => x.id !== p.id)); }}>Sil</Button></td>
+                <td><Button variant="danger" onClick={async () => { await api.delete(`/api/posts/${p.id}`); setPosts(posts.filter((x) => x.id !== p.id)); notify("Paylaşım silindi"); }}>Sil</Button></td>
               </tr>
             ))}
           </tbody>
@@ -82,14 +83,17 @@ export default function AdminPage() {
                       <Button variant="ghost" onClick={async () => {
                         const n = await api.post(`/api/admin/reports/${r.id}/resolve`, { action: "dismissed" });
                         setReports(reports.map((x) => x.id === n.id ? { ...x, status: n.status } : x));
+                        notify("Şikayət rədd edildi");
                       }}>Rədd et</Button>
                       <Button variant="danger" onClick={async () => {
                         const n = await api.post(`/api/admin/reports/${r.id}/resolve`, { action: "remove" });
                         setReports(reports.map((x) => x.id === n.id ? { ...x, status: n.status } : x));
+                        notify("Hədəf silindi");
                       }}>Sil</Button>
                       <Button variant="danger" onClick={async () => {
                         const n = await api.post(`/api/admin/reports/${r.id}/resolve`, { action: "ban" });
                         setReports(reports.map((x) => x.id === n.id ? { ...x, status: n.status } : x));
+                        notify("Hesab bloklandı");
                       }}>Ban</Button>
                     </>
                   ) : null}

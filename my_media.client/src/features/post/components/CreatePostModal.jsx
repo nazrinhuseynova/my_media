@@ -6,6 +6,7 @@ import { useAppStore } from "../../../stores/useAppStore";
 import { cropImage } from "../../../utils/cropImage";
 import { dataUrlToFile, uploadFile } from "../../../utils/upload";
 import { postApi } from "../services/postApi";
+import { notify } from "../../../stores/useNoticeStore";
 import { useAuthStore } from "../../auth/store/useAuthStore";
 import FilterPicker from "./FilterPicker";
 import ImageEditor from "./ImageEditor";
@@ -112,6 +113,7 @@ export default function CreatePostModal() {
       });
       const username = me?.username;
       close();
+      notify(asDraft ? "Qaralama yadda saxlandı" : scheduledAt ? "Paylaşım planlandı" : "Paylaşım getdi");
       window.location.assign(asDraft ? "/drafts" : scheduledAt && username ? `/profile/${username}` : "/");
     } catch (err) {
       setError(err.response?.data?.message || "Paylaşılmadı");

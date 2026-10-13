@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import Avatar from "../../components/ui/Avatar";
 import { useAuthStore } from "../auth/store/useAuthStore";
 import { COMMENT_EMOJIS } from "./emojis";
+import { notify } from "../../stores/useNoticeStore";
 
 export function EmojiPad({ onPick }) {
   return (
@@ -99,6 +100,7 @@ export default function CommentThread({ comments, onChange, submit, react, edit,
     const next = await edit(comment, editing.trim());
     onChange?.((Array.isArray(comments) ? comments : []).map((row) => (row.id === comment.id ? next : row)));
     setEditingId("");
+    notify("Şərh yadda saxlandı");
   }
 
   async function drop(comment) {
@@ -117,6 +119,7 @@ export default function CommentThread({ comments, onChange, submit, react, edit,
       });
     }
     onChange?.(source.filter((row) => !gone.has(row.id)));
+    notify("Şərh silindi");
   }
 
   return (

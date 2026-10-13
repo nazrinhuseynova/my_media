@@ -5,6 +5,7 @@ import { api } from "../../../services/api";
 import { formatDate } from "../../../utils/formatDate";
 import Button from "../../../components/ui/Button";
 import Avatar from "../../../components/ui/Avatar";
+import { notify } from "../../../stores/useNoticeStore";
 
 const TYPE_LABEL = {
   like: "Bəyənmə",
@@ -19,7 +20,7 @@ function whoOf(n) {
 }
 
 export default function NotificationsPage() {
-  const { items, load, markRead } = useNotificationStore();
+  const { items, hasMore, page, load, markRead } = useNotificationStore();
   const [requests, setRequests] = useState([]);
 
   useEffect(() => {
@@ -31,6 +32,7 @@ export default function NotificationsPage() {
     await api.post(`/api/follow-requests/${id}/${action}`);
     const next = await api.get("/api/follow-requests");
     setRequests(Array.isArray(next) ? next : []);
+    notify(action === "accept" ? "Sorğu qəbul edildi" : "Sorğu rədd edildi");
     load();
   }
 
@@ -113,6 +115,7 @@ export default function NotificationsPage() {
         {history.length === 0 ? (
           <p className="notify-empty">Bildiriş yoxdur</p>
         ) : history.map((n) => <Card key={n.id} n={n} />)}
+        {hasMore ? <Button variant="ghost" type="button" onClick={() => load(page + 1)}>Daha çox</Button> : null}
       </section>
 
       <Link className="notify-settings" to="/settings">Bildiriş ayarları</Link>

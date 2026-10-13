@@ -5,6 +5,7 @@ import { mediaSrc } from "../../../utils/upload";
 import Icon from "../../../components/ui/Icon";
 import Button from "../../../components/ui/Button";
 import Input from "../../../components/ui/Input";
+import { notify } from "../../../stores/useNoticeStore";
 
 export default function SavedPage() {
   const navigate = useNavigate();
@@ -28,7 +29,7 @@ export default function SavedPage() {
     e.preventDefault();
     const title = name.trim();
     if (!title) {
-      setError("Kolleksiya adı yaz");
+      notify("Kolleksiya adı yaz", true);
       return;
     }
     setError("");
@@ -37,8 +38,9 @@ export default function SavedPage() {
       setCollections((list) => [...list, col]);
       setName("");
       setActive(col.id);
+      notify("Kolleksiya yaradıldı");
     } catch (err) {
-      setError(err.response?.data?.message || "Kolleksiya yaradılmadı");
+      notify(err.response?.data?.message || "Kolleksiya yaradılmadı", true);
     }
   }
 
@@ -48,8 +50,9 @@ export default function SavedPage() {
     try {
       const next = await postApi.addToCollection(collectionId, { type: "post", id: postId });
       setCollections((list) => list.map((c) => (c.id === collectionId ? { ...c, items: next.items } : c)));
+      notify("Kolleksiyaya əlavə olundu");
     } catch (err) {
-      setError(err.response?.data?.message || "Əlavə olunmadı");
+      notify(err.response?.data?.message || "Əlavə olunmadı", true);
     }
   }
 
@@ -58,12 +61,14 @@ export default function SavedPage() {
     await postApi.deleteCollection(active);
     setCollections((list) => list.filter((c) => c.id !== active));
     setActive("");
+    notify("Kolleksiya silindi");
   }
 
   async function takeOut(postId) {
     if (!active) return;
     const next = await postApi.removeFromCollection(active, "post", postId);
     setCollections((list) => list.map((c) => (c.id === active ? { ...c, items: next.items } : c)));
+    notify("Kolleksiyadan çıxarıldı");
   }
 
   const shown = active

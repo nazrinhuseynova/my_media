@@ -4,6 +4,7 @@ import { useAppStore } from "../../../stores/useAppStore";
 import { api } from "../../../services/api";
 import { uploadFile, MUSIC_TRACKS } from "../../../utils/upload";
 import { useStoryStore } from "../store/useStoryStore";
+import { notify } from "../../../stores/useNoticeStore";
 
 const MARKS = ["🔥", "❤️", "📍", "😂", "✨", "🌊"];
 
@@ -79,6 +80,7 @@ export default function StoryUploader() {
         audience,
       });
       close();
+      notify("Hekayə yayıldı");
       load();
     } catch (err) {
       setError(err.response?.data?.message || "Hekayə göndərilmədi");

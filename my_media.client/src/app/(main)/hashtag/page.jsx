@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../../../services/api";
+import { notify } from "../../../stores/useNoticeStore";
 
 export default function HashtagPage() {
   const { tag } = useParams();
@@ -11,6 +12,7 @@ export default function HashtagPage() {
   async function follow() {
     const res = await api.post(`/api/hashtags/${tag}/follow`);
     setData((d) => ({ ...d, following: res.following }));
+    notify(res.following ? "Etiket izlənilir" : "Etiket izləməsi dayandı");
   }
   return (
     <div className="page">

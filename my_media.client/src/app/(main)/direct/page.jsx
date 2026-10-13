@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { api } from "../../../services/api";
 import { useChatStore } from "../../../features/chat/store/useChatStore";
@@ -9,6 +9,7 @@ import Icon from "../../../components/ui/Icon";
 import { formatDate } from "../../../utils/formatDate";
 import { onSocket, connectSocket } from "../../../lib/socket";
 import { uploadFile } from "../../../utils/upload";
+import { notify } from "../../../stores/useNoticeStore";
 
 async function resolveUsernames(raw) {
   const names = String(raw || "")
@@ -35,7 +36,7 @@ export default function DirectPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const me = useAuthStore((s) => s.user);
-  const { conversations, loadConversations, openChat, messages, send, typing } = useChatStore();
+  const { conversations, loadConversations, openChat, messages, send, typing, hasMoreMessages, loadOlder } = useChatStore();
   const [text, setText] = useState("");
   const [typingName, setTypingName] = useState("");
   const [groupTitle, setGroupTitle] = useState("");
@@ -43,6 +44,12 @@ export default function DirectPage() {
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [recording, setRecording] = useState(false);
+  const [following, setFollowing] = useState([]);
+  const [menuId, setMenuId] = useState("");
+  const [menuBox, setMenuBox] = useState(null);
+  const [reply, setReply] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [forwardMsg, setForwardMsg] = useState(null);
   const mediaRef = useRef();
   const recRef = useRef(null);
   const streamRef = useRef(null);
@@ -51,6 +58,58 @@ export default function DirectPage() {
   useEffect(() => {
     loadConversations();
   }, [loadConversations]);
+
+  useEffect(() => {
+    if (!me?.username) return;
+    api.get(`/api/users/${me.username}/following`)
+      .then((list) => setFollowing(Array.isArray(list) ? list : []))
+      .catch(() => setFollowing([]));
+  }, [me?.username]);
+
+  const people = useMemo(() => {
+    const map = new Map();
+    for (const conv of conversations) {
+      for (const member of conv.members || []) {
+        if (!member?.id || String(member.id) === String(me?.id)) continue;
+        const prev = map.get(member.id);
+        const directId = conv.isGroup ? prev?.convId || null : conv.id;
+        map.set(member.id, {
+          ...member,
+          isOnline: Boolean(member.isOnline || prev?.isOnline),
+          convId: directId,
+        });
+      }
+    }
+    for (const person of following) {
+      if (!person?.id || String(person.id) === String(me?.id)) continue;
+      const prev = map.get(person.id);
+      if (prev) {
+        map.set(person.id, { ...prev, isOnline: Boolean(person.isOnline || prev.isOnline) });
+      } else {
+        map.set(person.id, { ...person, isOnline: Boolean(person.isOnline), convId: null });
+      }
+    }
+    return [...map.values()].sort((a, b) => Number(b.isOnline) - Number(a.isOnline));
+  }, [conversations, following, me?.id]);
+
+  async function openPerson(person) {
+    if (person.convId) {
+      navigate(`/direct/${person.convId}`);
+      return;
+    }
+    setError("");
+    try {
+      const conv = await api.post("/api/conversations", {
+        isGroup: false,
+        title: "",
+        memberIds: [person.id],
+      });
+      await loadConversations();
+      navigate(`/direct/${conv.id}`);
+    } catch (err) {
+      setError(err.response?.data?.message || "Söhbət açılmadı");
+    }
+  }
 
   useEffect(() => {
     if (id) openChat(id);
@@ -90,6 +149,15 @@ export default function DirectPage() {
   }, [id]);
 
   useEffect(() => {
+    return onSocket("messageEdited", (p) => {
+      if (String(p.conversationId) !== String(id)) return;
+      useChatStore.setState((s) => ({
+        messages: s.messages.map((row) => String(row.id) === String(p.id) ? p : row),
+      }));
+    });
+  }, [id]);
+
+  useEffect(() => {
     let timer;
     return onSocket("typing", (p) => {
       if (p.conversationId === id && String(p.userId) !== String(me?.id)) {
@@ -107,9 +175,58 @@ export default function DirectPage() {
   async function submit(e) {
     e.preventDefault();
     if (!text.trim() || !id) return;
-    await send({ type: "text", text: text.trim() });
+    if (editing) {
+      const updated = await api.patch(`/api/conversations/${id}/messages/${editing.id}`, { text: text.trim() });
+      useChatStore.setState((s) => ({
+        messages: s.messages.map((row) => row.id === updated.id ? updated : row),
+      }));
+      setEditing(null);
+      setText("");
+      notify("Mesaj yeniləndi");
+      return;
+    }
+    await send({ type: "text", text: text.trim(), replyToId: reply?.id || "" });
     setText("");
+    setReply(null);
     loadConversations();
+  }
+
+  function copyMessage(message) {
+    const value = message.deleted ? "" : (message.text || "");
+    if (!value) return;
+    navigator.clipboard?.writeText(value);
+    setMenuId("");
+  }
+
+  async function unsend(message) {
+    await api.delete(`/api/conversations/${id}/messages/${message.id}`);
+    notify("Mesaj geri alındı");
+    useChatStore.setState((s) => ({
+      messages: s.messages.map((row) => row.id === message.id ? { ...row, deleted: true, text: "Mesaj silindi", mediaUrl: "", type: "text" } : row),
+    }));
+    setMenuId("");
+  }
+
+  async function hideForMe(message) {
+    await api.post(`/api/conversations/${id}/messages/${message.id}/hide`);
+    notify("Mesaj gizlədildi");
+    useChatStore.setState((s) => ({ messages: s.messages.filter((row) => row.id !== message.id) }));
+    setMenuId("");
+  }
+
+  async function forwardTo(convId) {
+    if (!forwardMsg || forwardMsg.deleted) return;
+    await api.post(`/api/conversations/${convId}/messages`, {
+      type: forwardMsg.type || "text",
+      text: forwardMsg.text || "",
+      mediaUrl: forwardMsg.mediaUrl || "",
+      mediaExtension: forwardMsg.mediaExtension || "",
+      sharedPostId: forwardMsg.sharedPostId || "",
+    });
+    setForwardMsg(null);
+    setMenuId("");
+    notify("Mesaj yönləndirildi");
+    await loadConversations();
   }
 
   async function sendFile(e) {
@@ -204,9 +321,22 @@ export default function DirectPage() {
   });
 
   return (
-    <div className="page direct-page">
+    <div className="page direct-page stage-lock">
       <div className={`chat-layout${id ? " has-thread" : ""}`}>
         <aside className="chat-list">
+          {people.length ? (
+            <div className="chat-people" aria-label="Aktiv və izlədiklərin">
+              {people.map((person) => (
+                <button key={person.id} type="button" className="chat-person" onClick={() => openPerson(person)}>
+                  <span className="chat-person-face">
+                    <Avatar src={person.avatar} alt={person.fullName || person.username} />
+                    {person.isOnline ? <span className="chat-person-dot" aria-label="Aktiv" /> : null}
+                  </span>
+                  <span>{person.username}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
           <div className="chat-list-head">
             <h3>Mesajlar</h3>
             <input
@@ -253,29 +383,73 @@ export default function DirectPage() {
                 </div>
               </header>
               <div className="messages">
-                {messages.map((m) => (
-                  <div key={m.id} className={`bubble ${m.senderId === me.id ? "me" : ""}`}>
-                    {active?.isGroup ? <div className="bubble-name">{m.sender?.username}</div> : null}
-                    {!m.deleted && m.type === "image" ? <img src={m.mediaUrl} alt="" /> : null}
-                    {!m.deleted && m.type === "video" ? <video src={m.mediaUrl} controls /> : null}
-                    {!m.deleted && m.type === "audio" ? <audio src={m.mediaUrl} controls /> : null}
-                    {!m.deleted && m.type === "post" && m.sharedPostId ? <Link to={`/p/${m.sharedPostId}`}>Paylaşıma bax</Link> : null}
-                    {!m.deleted && m.type === "reel" && m.sharedPostId ? <Link to={`/reels?v=${m.sharedPostId}`}>Videoya bax</Link> : null}
-                    {m.text ? <div>{m.text}</div> : null}
-                    <div className="bubble-meta">
-                      {formatDate(m.createdAt)} · {m.readBy?.length > 1 ? "oxundu" : "göndərildi"}
-                      {m.senderId === me.id && !m.deleted ? (
-                        <button type="button" onClick={async () => {
-                          await api.delete(`/api/conversations/${id}/messages/${m.id}`);
-                          useChatStore.setState((s) => ({ messages: s.messages.map((row) => row.id === m.id ? { ...row, deleted: true, text: "Mesaj silindi", mediaUrl: "" } : row) }));
-                        }}>Sil</button>
+                {hasMoreMessages ? (
+                  <button type="button" className="btn btn-ghost" onClick={() => loadOlder()}>Əvvəlki mesajlar</button>
+                ) : null}
+                {messages.map((m) => {
+                  const mine = m.senderId === me.id;
+                  const status = m.readBy?.length > 1 ? "oxundu" : "göndərildi";
+                  return (
+                    <div key={m.id} className={`msg-row${mine ? " me" : ""}`}>
+                      {mine ? (
+                        <span className="msg-side">{formatDate(m.createdAt)} · {status}{m.edited ? " · düzəldildi" : ""}</span>
                       ) : null}
+                      <div className={`bubble${mine ? " me" : ""}`}>
+                        {active?.isGroup ? <div className="bubble-name">{m.sender?.username}</div> : null}
+                        {!m.deleted && m.replyText ? (
+                          <div className="msg-quote">
+                            <strong>{m.replyUser || "Mesaj"}</strong>
+                            <span>{m.replyText}</span>
+                          </div>
+                        ) : null}
+                        {!m.deleted && m.type === "image" ? <img src={m.mediaUrl} alt="" /> : null}
+                        {!m.deleted && m.type === "video" ? <video src={m.mediaUrl} controls /> : null}
+                        {!m.deleted && m.type === "audio" ? <audio src={m.mediaUrl} controls /> : null}
+                        {!m.deleted && m.type === "post" && m.sharedPostId ? <Link to={`/p/${m.sharedPostId}`}>Paylaşıma bax</Link> : null}
+                        {!m.deleted && m.type === "reel" && m.sharedPostId ? <Link to={`/reels?v=${m.sharedPostId}`}>Videoya bax</Link> : null}
+                        {m.text ? <div className="msg-text">{m.text}</div> : null}
+                        <button type="button" className="msg-more" aria-label="Mesaj əməliyyatları" onClick={(e) => {
+                          if (menuId === m.id) {
+                            setMenuId("");
+                            return;
+                          }
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setMenuBox({ top: rect.bottom + 6, left: Math.max(8, Math.min(rect.left, window.innerWidth - 196)) });
+                          setMenuId(m.id);
+                        }}>
+                          <span className="msg-dots" aria-hidden="true"><i /><i /><i /></span>
+                        </button>
+                        {menuId === m.id ? (
+                          <div className="msg-menu" role="menu" style={menuBox || undefined}>
+                            {!m.deleted ? <button type="button" onClick={() => { setReply(m); setEditing(null); setMenuId(""); }}>Yanıtla</button> : null}
+                            {!m.deleted && m.text ? <button type="button" onClick={() => copyMessage(m)}>Kopyala</button> : null}
+                            {!m.deleted ? <button type="button" onClick={() => { setForwardMsg(m); setMenuId(""); }}>İlet</button> : null}
+                            {mine && !m.deleted && m.type === "text" ? <button type="button" onClick={() => { setEditing(m); setReply(null); setText(m.text || ""); setMenuId(""); }}>Düzəlt</button> : null}
+                            {mine && !m.deleted ? <button type="button" onClick={() => unsend(m)}>Göndərimi geri al</button> : null}
+                            <button type="button" onClick={() => hideForMe(m)}>Özün üçün sil</button>
+                            {mine && !m.deleted ? <button type="button" onClick={() => unsend(m)}>Sil</button> : null}
+                          </div>
+                        ) : null}
+                      </div>
+                      {!mine ? <span className="msg-side">{formatDate(m.createdAt)}{m.edited ? " · düzəldildi" : ""}</span> : null}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
                 <div ref={bottomRef} />
               </div>
               {error ? <p className="error-text" style={{ padding: "0 12px" }}>{error}</p> : null}
+              {reply ? (
+                <div className="msg-banner">
+                  <span>Yanıt: {reply.text || "Media"}</span>
+                  <button type="button" onClick={() => setReply(null)}>Bağla</button>
+                </div>
+              ) : null}
+              {editing ? (
+                <div className="msg-banner">
+                  <span>Düzəliş</span>
+                  <button type="button" onClick={() => { setEditing(null); setText(""); }}>Bağla</button>
+                </div>
+              ) : null}
               <form className="chat-composer" onSubmit={submit}>
                 <input
                   value={text}
@@ -303,6 +477,19 @@ export default function DirectPage() {
           )}
         </section>
       </div>
+      {forwardMsg ? (
+        <div className="msg-forward" role="dialog" aria-label="İlet">
+          <div className="msg-forward-card">
+            <strong>İlet</strong>
+            <button type="button" className="msg-forward-close" onClick={() => setForwardMsg(null)}>Bağla</button>
+            {conversations.filter((c) => c.id !== id).map((c) => (
+              <button key={c.id} type="button" className="msg-forward-item" onClick={() => forwardTo(c.id)}>
+                {chatTitle(c)}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import Button from "../../../components/ui/Button";
 import { useAppStore } from "../../../stores/useAppStore";
 import { api } from "../../../services/api";
 import { uploadFile, MUSIC_TRACKS } from "../../../utils/upload";
+import { notify } from "../../../stores/useNoticeStore";
 
 const EFFECTS = ["none", "warm", "cool", "moon", "clarendon"];
 
@@ -30,6 +31,7 @@ export default function CreateReelModal() {
         effect,
       });
       setOpen(false);
+      notify("Reel paylaşıldı");
       window.location.assign("/reels");
     } catch {
     }

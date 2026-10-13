@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { postApi } from "../../../features/post/services/postApi";
+import { notify } from "../../../stores/useNoticeStore";
 
 export default function ShelfPage() {
   const drafts = useLocation().pathname.includes("draft");
@@ -9,7 +10,7 @@ export default function ShelfPage() {
 
   useEffect(() => {
     const load = drafts ? postApi.drafts : postApi.archived;
-    load().then(setPosts).catch(() => setPosts([]));
+    load().then((data) => setPosts(Array.isArray(data) ? data : (data?.items || []))).catch(() => setPosts([]));
   }, [drafts]);
 
   async function publish(id) {
@@ -17,14 +18,16 @@ export default function ShelfPage() {
     try {
       await postApi.update(id, { publishDraft: true });
       setPosts((list) => list.filter((p) => p.id !== id));
+      notify("Qaralama paylaşıldı");
     } catch (err) {
-      setError(err.response?.data?.message || "Paylaşılmadı");
+      notify(err.response?.data?.message || "Paylaşılmadı", true);
     }
   }
 
   async function restore(id) {
     await postApi.archive(id);
     setPosts((list) => list.filter((p) => p.id !== id));
+    notify("Arxivdən çıxarıldı");
   }
 
   return (

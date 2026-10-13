@@ -9,8 +9,8 @@ import { useAppStore } from "../../../stores/useAppStore";
 import { usePostStore } from "../../../features/post/store/usePostStore";
 import PostCard from "../../../features/post/components/PostCard";
 import StoryBar from "../../../features/story/components/StoryBar";
-import LiveRail from "../../../features/live/LiveRail";
 import { useIntersection } from "../../../hooks/useIntersection";
+import { notify } from "../../../stores/useNoticeStore";
 
 function SuggestRail({ people, onFollow }) {
   const row = useRef(null);
@@ -147,7 +147,6 @@ export default function FeedPage() {
         <h1>Ana səhifə</h1>
         <p className="muted">İzlədiyin insanların paylaşımları burada görünür.</p>
       </header>
-      <LiveRail />
       <button type="button" className="composer" onClick={() => setCreateOpen(true)}>
         <Avatar src={me?.avatar} alt={me?.username || ""} />
         <span>Nə paylaşmaq istəyirsən?</span>
@@ -163,6 +162,7 @@ export default function FeedPage() {
             try {
               await api.post(`/api/users/${person.id}/follow`);
               setPeople((list) => list.filter((item) => item.id !== person.id));
+              notify(person.isPrivate ? "İzləmə sorğusu göndərildi" : "İzlədin");
             } catch {
               setPeople((list) => list);
             }

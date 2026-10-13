@@ -8,6 +8,7 @@ import CommentPanel from "../../../features/post/components/CommentPanel";
 import Button from "../../../components/ui/Button";
 import Input from "../../../components/ui/Input";
 import Icon from "../../../components/ui/Icon";
+import { notify } from "../../../stores/useNoticeStore";
 
 export default function PostPage() {
   const { id } = useParams();
@@ -16,7 +17,6 @@ export default function PostPage() {
   const [post, setPost] = useState(null);
   const [edit, setEdit] = useState("");
   const [editing, setEditing] = useState(false);
-  const [note, setNote] = useState("");
 
   async function load() {
     const data = await postApi.one(id);
@@ -48,9 +48,9 @@ export default function PostPage() {
         {mine ? (
           <div className="row">
             <Button variant="ghost" type="button" onClick={() => setEditing((v) => !v)}>Redaktə</Button>
-            <Button variant="ghost" type="button" onClick={async () => { await postApi.pin(post.id); load(); }}>{post.isPinned ? "Sabitdən çıxar" : "Sabitlə"}</Button>
-            <Button variant="ghost" type="button" onClick={async () => { await postApi.archive(post.id); navigate("/"); }}>{post.isArchived ? "Arxivdən çıxar" : "Arxiv"}</Button>
-            <Button variant="danger" type="button" onClick={async () => { await postApi.remove(post.id); navigate("/"); }}>Sil</Button>
+            <Button variant="ghost" type="button" onClick={async () => { await postApi.pin(post.id); notify(post.isPinned ? "Sabitdən çıxarıldı" : "Paylaşım sabitləndi"); load(); }}>{post.isPinned ? "Sabitdən çıxar" : "Sabitlə"}</Button>
+            <Button variant="ghost" type="button" onClick={async () => { await postApi.archive(post.id); notify(post.isArchived ? "Arxivdən çıxarıldı" : "Arxivə köçürüldü"); navigate("/"); }}>{post.isArchived ? "Arxivdən çıxar" : "Arxiv"}</Button>
+            <Button variant="danger" type="button" onClick={async () => { await postApi.remove(post.id); notify("Paylaşım silindi"); navigate("/"); }}>Sil</Button>
           </div>
         ) : (
           <Button
@@ -58,19 +58,18 @@ export default function PostPage() {
             type="button"
             onClick={async () => {
               await api.post("/api/reports", { targetType: "post", targetId: post.id, reason: "Uyğunsuz kontent" });
-              setNote("Şikayət göndərildi");
+              notify("Şikayət göndərildi");
             }}
           >
             Şikayət et
           </Button>
         )}
       </div>
-      {note ? <p className="success-text">{note}</p> : null}
       {editing ? (
         <div className="post-edit">
           <Input value={edit} onChange={(e) => setEdit(e.target.value)} label="Caption" />
-          <Button type="button" onClick={async () => { await postApi.update(post.id, { caption: edit }); setEditing(false); load(); }}>Yadda saxla</Button>
-          {post.scheduledAt ? <Button variant="ghost" type="button" onClick={async () => { await postApi.update(post.id, { clearSchedule: true }); load(); }}>Planı ləğv et</Button> : null}
+          <Button type="button" onClick={async () => { await postApi.update(post.id, { caption: edit }); setEditing(false); notify("Yazı yadda saxlandı"); load(); }}>Yadda saxla</Button>
+          {post.scheduledAt ? <Button variant="ghost" type="button" onClick={async () => { await postApi.update(post.id, { clearSchedule: true }); notify("Plan ləğv edildi"); load(); }}>Planı ləğv et</Button> : null}
         </div>
       ) : null}
       <div className="post-detail">
