@@ -5,12 +5,14 @@ import { useAppStore } from "../../../stores/useAppStore";
 import { useTheme } from "../../../providers/ThemeProvider";
 import Icon from "../../ui/Icon";
 import Avatar from "../../ui/Avatar";
+import { useAccountSheet } from "../../../features/auth/components/AccountSheet";
 
 export default function BottomNav() {
   const user = useAuthStore((s) => s.user);
   const setCreateOpen = useAppStore((s) => s.setCreateOpen);
   const { toggle, theme } = useTheme();
   const [more, setMore] = useState(false);
+  const showAccounts = useAccountSheet((s) => s.show);
 
   function close() {
     setMore(false);
@@ -26,6 +28,7 @@ export default function BottomNav() {
           <NavLink to="/notifications" onClick={close}><Icon name="heart" size={20} /> Bildirişlər</NavLink>
           <NavLink to="/saved" onClick={close}><Icon name="bookmark" size={20} /> Saxlanılanlar</NavLink>
           <NavLink to="/settings" onClick={close}><Icon name="settings" size={20} /> Ayarlar</NavLink>
+          <button type="button" onClick={() => { close(); showAccounts(); }}><Icon name="user" size={20} /> Hesablar</button>
           {user?.role === "admin" ? <NavLink to="/admin" onClick={close}><Icon name="settings" size={20} /> Admin</NavLink> : null}
           <button type="button" onClick={toggle}>
             <Icon name="theme" size={20} />

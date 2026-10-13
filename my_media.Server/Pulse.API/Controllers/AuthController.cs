@@ -5,7 +5,6 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
 using Pulse.API.Helpers;
 using Pulse.Application.Auth.DTOs;
@@ -24,16 +23,14 @@ public class AuthController : ControllerBase
     private readonly ITokenService _tokens;
     private readonly AppDbContext _db;
     private readonly IOtpSender _otp;
-    private readonly IHostEnvironment _env;
     private readonly IConfiguration _config;
 
-    public AuthController(UserManager<AppUser> users, ITokenService tokens, AppDbContext db, IOtpSender otp, IHostEnvironment env, IConfiguration config)
+    public AuthController(UserManager<AppUser> users, ITokenService tokens, AppDbContext db, IOtpSender otp, IConfiguration config)
     {
         _users = users;
         _tokens = tokens;
         _db = db;
         _otp = otp;
-        _env = env;
         _config = config;
     }
 
@@ -108,35 +105,38 @@ public class AuthController : ControllerBase
 
         await _users.AddToRoleAsync(user, "User");
 
-        var code = await IssueOtpAsync(user, contact, "register");
-        return Ok(new { message = "Kod göndərildi", previewCode = Preview(code), userId = user.Id });
+        await IssueOtpAsync(user, contact, "register");
+        return Ok(new { message = "Kod göndərildi", userId = user.Id });
     }
 
     [HttpPost("login")]
     public async Task<IActionResult> Login(LoginRequest request)
     {
         var user = await FindUserAsync(request.Contact);
+        if (user != null && await _users.IsLockedOutAsync(user))
+            return StatusCode(403, new { message = "Hesab müvəqqəti bağlıdır. Bir az sonra yenidən cəhd et" });
         if (user == null || !await _users.CheckPasswordAsync(user, request.Password ?? ""))
         {
+            if (user != null) await _users.AccessFailedAsync(user);
             return Unauthorized(new { message = "İstifadəçi adı və ya şifrə yanlışdır" });
         }
+        await _users.ResetAccessFailedCountAsync(user);
 
         if (!user.EmailConfirmed)
         {
-            var code = await IssueOtpAsync(user, request.Contact ?? user.Email ?? user.UserName ?? "", "register");
+            await IssueOtpAsync(user, request.Contact ?? user.Email ?? user.UserName ?? "", "register");
             return StatusCode(403, new
             {
                 message = "Əvvəlcə kodu təsdiqləyin",
                 needsOtp = true,
-                userId = user.Id,
-                previewCode = Preview(code)
+                userId = user.Id
             });
         }
 
         var blocked = CheckAccount(user);
         if (blocked != null) return blocked;
 
-        return Ok(await BuildLogin(user));
+        return Ok(await BuildLogin(user, request.Device));
     }
 
     [HttpPost("google")]
@@ -144,12 +144,18 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> Social(SocialLoginRequest request)
     {
         var provider = Request.Path.Value!.Contains("google") ? "google" : "apple";
-        if (string.IsNullOrWhiteSpace(request.Email) || !request.Email.Contains('@'))
+        var audience = provider == "google" ? _config["Google:ClientId"] : _config["Apple:ClientId"];
+        ProviderIdentity identity;
+        try
         {
-            return BadRequest(new { message = "Düzgün email yazın" });
+            identity = await ProviderTokenVerifier.ReadAsync(provider, request.IdToken, audience);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
         }
 
-        var email = request.Email.Trim().ToLowerInvariant();
+        var email = identity.Email;
         var user = await _users.FindByEmailAsync(email);
         if (user != null)
         {
@@ -182,7 +188,9 @@ public class AuthController : ControllerBase
                 UserName = username,
                 Email = email,
                 FullName = string.IsNullOrWhiteSpace(request.FullName)
-                    ? (provider == "google" ? "Google Istifadeci" : "Apple Istifadeci")
+                    ? (string.IsNullOrWhiteSpace(identity.Name)
+                        ? (provider == "google" ? "Google Istifadeci" : "Apple Istifadeci")
+                        : identity.Name)
                     : request.FullName.Trim(),
                 Provider = provider,
                 AvatarUrl = $"https://i.pravatar.cc/300?u={email}",
@@ -200,7 +208,7 @@ public class AuthController : ControllerBase
         var blocked = CheckAccount(user);
         if (blocked != null) return blocked;
 
-        return Ok(await BuildLogin(user));
+        return Ok(await BuildLogin(user, request.Device));
     }
 
     [HttpPost("forgot-password")]
@@ -213,8 +221,8 @@ public class AuthController : ControllerBase
         }
 
         var contact = (request.Contact ?? "").Trim();
-        var code = await IssueOtpAsync(user, contact, "reset");
-        return Ok(new { message = "Kod göndərildi", previewCode = Preview(code), userId = user.Id });
+        await IssueOtpAsync(user, contact, "reset");
+        return Ok(new { message = "Kod göndərildi", userId = user.Id });
     }
 
     [HttpPost("resend-otp")]
@@ -228,8 +236,8 @@ public class AuthController : ControllerBase
 
         var type = request.Type == "reset" ? "reset" : "register";
         var contact = string.IsNullOrWhiteSpace(user.PhoneNumber) ? user.Email ?? user.UserName ?? "" : user.PhoneNumber;
-        var code = await IssueOtpAsync(user, contact, type);
-        return Ok(new { message = "Kod yenidən göndərildi", previewCode = Preview(code) });
+        await IssueOtpAsync(user, contact, type);
+        return Ok(new { message = "Kod yenidən göndərildi" });
     }
 
     [HttpPost("verify-otp")]
@@ -240,7 +248,7 @@ public class AuthController : ControllerBase
             .OrderByDescending(x => x.CreatedAt)
             .FirstOrDefaultAsync();
 
-        if (otp == null || DateTime.UtcNow - otp.CreatedAt > TimeSpan.FromMinutes(10))
+        if (otp == null || otp.IsDeleted || DateTime.UtcNow - otp.CreatedAt > TimeSpan.FromMinutes(10))
         {
             return BadRequest(new { message = "Kod yanlışdır və ya vaxtı bitib" });
         }
@@ -256,13 +264,15 @@ public class AuthController : ControllerBase
         _db.OtpCodes.Remove(otp);
         await _db.SaveChangesAsync();
 
+        var blocked = CheckAccount(user);
+        if (blocked != null) return blocked;
+
         if (otp.Type == "register")
         {
-            return Ok(await BuildLogin(user));
+            return Ok(await BuildLogin(user, request.Device));
         }
 
-        var reset = await _tokens.CreateAccessTokenAsync(user);
-        return Ok(new { resetToken = reset.Token, message = "Kod tesdiqlendi" });
+        return Ok(new { resetToken = CreateResetToken(user), message = "Kod tesdiqlendi" });
     }
 
     [HttpPost("reset-password")]
@@ -295,6 +305,8 @@ public class AuthController : ControllerBase
         {
             return BadRequest(new { message = "Şifrə kodu yanlışdır və ya vaxtı bitib" });
         }
+        if (principal.FindFirst("purpose")?.Value != "password-reset")
+            return BadRequest(new { message = "Şifrə kodu yanlışdır və ya vaxtı bitib" });
         var id = principal.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
             ?? principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
         if (string.IsNullOrWhiteSpace(id)) return BadRequest(new { message = "Şifrə kodu yanlışdır və ya vaxtı bitib" });
@@ -303,6 +315,10 @@ public class AuthController : ControllerBase
         {
             return NotFound(new { message = "İstifadəçi tapılmadı" });
         }
+        var blocked = CheckAccount(user);
+        if (blocked != null) return blocked;
+        if (principal.FindFirst("sst")?.Value != user.SecurityStamp)
+            return BadRequest(new { message = "Şifrə kodu yanlışdır və ya vaxtı bitib" });
 
         var token = await _users.GeneratePasswordResetTokenAsync(user);
         var result = await _users.ResetPasswordAsync(user, token, request.Password);
@@ -311,7 +327,97 @@ public class AuthController : ControllerBase
             return BadRequest(new { message = result.Errors.First().Description });
         }
 
+        await DropSessions(user);
         return Ok(new { message = "Şifrə yeniləndi" });
+    }
+
+    [HttpPost("refresh")]
+    public async Task<IActionResult> Refresh(RefreshRequest request)
+    {
+        var token = (request.RefreshToken ?? "").Trim();
+        if (token.Length == 0) return Unauthorized(new { message = "Sessiya bitib" });
+        var row = await _db.RefreshTokens.Include(t => t.User).FirstOrDefaultAsync(t => t.Token == token && !t.IsDeleted);
+        if (row == null || row.IsRevoked || row.ExpiresAt <= DateTime.UtcNow)
+            return Unauthorized(new { message = "Sessiya bitib" });
+        var blocked = CheckAccount(row.User);
+        if (blocked != null) return blocked;
+        row.IsRevoked = true;
+        row.RevokedAt = DateTime.UtcNow;
+        var device = string.IsNullOrWhiteSpace(request.Device) ? row.DeviceName : request.Device;
+        return Ok(await BuildLogin(row.User, device));
+    }
+
+    [HttpPost("logout")]
+    public async Task<IActionResult> Logout(RefreshRequest request)
+    {
+        var token = (request.RefreshToken ?? "").Trim();
+        if (token.Length == 0) return Ok(new { message = "Çıxış olundu" });
+        var row = await _db.RefreshTokens.FirstOrDefaultAsync(t => t.Token == token && !t.IsDeleted);
+        if (row != null && !row.IsRevoked)
+        {
+            row.IsRevoked = true;
+            row.RevokedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync();
+        }
+        return Ok(new { message = "Çıxış olundu" });
+    }
+
+    [Authorize]
+    [HttpGet("sessions")]
+    public async Task<IActionResult> Sessions()
+    {
+        var userId = DtoMapper.GetUserId(User);
+        var now = DateTime.UtcNow;
+        var current = User.FindFirst("sid")?.Value;
+        var rows = await _db.RefreshTokens
+            .Where(t => t.UserId == userId && !t.IsRevoked && !t.IsDeleted && t.ExpiresAt > now)
+            .OrderByDescending(t => t.LastUsedAt)
+            .ToListAsync();
+        return Ok(rows.Select(t => new
+        {
+            id = t.Id,
+            device = string.IsNullOrWhiteSpace(t.DeviceName) ? "Naməlum cihaz" : t.DeviceName,
+            createdAt = t.CreatedAt,
+            lastUsedAt = t.LastUsedAt,
+            current = string.Equals(current, t.Id.ToString(), StringComparison.OrdinalIgnoreCase)
+        }));
+    }
+
+    [Authorize]
+    [HttpDelete("sessions/{id:guid}")]
+    public async Task<IActionResult> RevokeSession(Guid id)
+    {
+        var userId = DtoMapper.GetUserId(User);
+        var row = await _db.RefreshTokens.FirstOrDefaultAsync(t => t.Id == id && t.UserId == userId && !t.IsDeleted);
+        if (row == null) return NotFound(new { message = "Sessiya tapılmadı" });
+        if (!row.IsRevoked)
+        {
+            row.IsRevoked = true;
+            row.RevokedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync();
+        }
+        var current = string.Equals(User.FindFirst("sid")?.Value, id.ToString(), StringComparison.OrdinalIgnoreCase);
+        return Ok(new { message = "Sessiya bağlandı", current });
+    }
+
+    [Authorize]
+    [HttpPost("sessions/revoke-others")]
+    public async Task<IActionResult> RevokeOtherSessions()
+    {
+        var userId = DtoMapper.GetUserId(User);
+        var current = User.FindFirst("sid")?.Value;
+        Guid.TryParse(current, out var sid);
+        var rows = await _db.RefreshTokens
+            .Where(t => t.UserId == userId && !t.IsRevoked && !t.IsDeleted && t.Id != sid)
+            .ToListAsync();
+        var now = DateTime.UtcNow;
+        foreach (var row in rows)
+        {
+            row.IsRevoked = true;
+            row.RevokedAt = now;
+        }
+        if (rows.Count > 0) await _db.SaveChangesAsync();
+        return Ok(new { message = "Digər sessiyalar bağlandı", count = rows.Count });
     }
 
     [Authorize]
@@ -329,13 +435,16 @@ public class AuthController : ControllerBase
     {
         var user = await _users.FindByIdAsync(DtoMapper.GetUserId(User).ToString());
         if (user == null) return Unauthorized();
+        var passwordError = PasswordProblem(request.NewPassword);
+        if (passwordError != null) return BadRequest(new { message = passwordError });
         var result = await _users.ChangePasswordAsync(user, request.CurrentPassword, request.NewPassword);
         if (!result.Succeeded)
         {
             return BadRequest(new { message = IdentityMessage(result) });
         }
 
-        return Ok(new { message = "Sifre deyisdirildi" });
+        await DropSessions(user);
+        return Ok(await BuildLogin(user, null));
     }
 
     [Authorize]
@@ -347,6 +456,7 @@ public class AuthController : ControllerBase
         user.IsActive = false;
         user.UpdatedAt = DateTime.UtcNow;
         await _users.UpdateAsync(user);
+        await DropSessions(user);
         return Ok(new { message = "Hesab deaktiv edildi" });
     }
 
@@ -367,6 +477,7 @@ public class AuthController : ControllerBase
         await _users.SetEmailAsync(user, $"deleted_{stamp}@pulse.invalid");
         await _users.SetUserNameAsync(user, $"deleted_{stamp}");
         await _users.UpdateAsync(user);
+        await DropSessions(user);
         return Ok(new { message = "Hesab silindi" });
     }
 
@@ -402,6 +513,19 @@ public class AuthController : ControllerBase
         return cleaned.Length > 20 ? cleaned[..20] : cleaned;
     }
 
+    private async Task DropSessions(AppUser user)
+    {
+        await _users.UpdateSecurityStampAsync(user);
+        var rows = await _db.RefreshTokens.Where(t => t.UserId == user.Id && !t.IsRevoked && !t.IsDeleted).ToListAsync();
+        var now = DateTime.UtcNow;
+        foreach (var row in rows)
+        {
+            row.IsRevoked = true;
+            row.RevokedAt = now;
+        }
+        if (rows.Count > 0) await _db.SaveChangesAsync();
+    }
+
     private IActionResult? CheckAccount(AppUser user)
     {
         if (!user.IsActive) return StatusCode(403, new { message = "Hesab deaktivdir" });
@@ -430,14 +554,24 @@ public class AuthController : ControllerBase
         return code;
     }
 
-    private string? Preview(string code)
+    private string CreateResetToken(AppUser user)
     {
-        if (_env.IsDevelopment() || !string.IsNullOrWhiteSpace(_config["Smtp:PickupDirectory"]))
+        var key = _config["Jwt:Key"] ?? "";
+        var claims = new List<System.Security.Claims.Claim>
         {
-            return code;
-        }
-
-        return null;
+            new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
+            new("purpose", "password-reset"),
+            new("sst", user.SecurityStamp ?? "")
+        };
+        var jwt = new JwtSecurityToken(
+            issuer: _config["Jwt:Issuer"],
+            audience: _config["Jwt:Audience"],
+            claims: claims,
+            expires: DateTime.UtcNow.AddMinutes(15),
+            signingCredentials: new SigningCredentials(
+                new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key)),
+                SecurityAlgorithms.HmacSha256));
+        return new JwtSecurityTokenHandler().WriteToken(jwt);
     }
 
     private static string? PasswordProblem(string? password)
@@ -471,22 +605,49 @@ public class AuthController : ControllerBase
         };
     }
 
-    private async Task<object> BuildLogin(AppUser user)
+    private async Task<object> BuildLogin(AppUser user, string? device)
     {
-        var access = await _tokens.CreateAccessTokenAsync(user);
         var refresh = _tokens.CreateRefreshToken();
-        _db.RefreshTokens.Add(new RefreshToken
+        var row = new RefreshToken
         {
             UserId = user.Id,
             Token = refresh.Token,
-            ExpiresAt = refresh.ExpiresAt
-        });
+            ExpiresAt = refresh.ExpiresAt,
+            DeviceName = CleanDevice(device),
+            LastUsedAt = DateTime.UtcNow
+        };
+        _db.RefreshTokens.Add(row);
         await _db.SaveChangesAsync();
+        var access = await _tokens.CreateAccessTokenAsync(user, row.Id);
         var role = await DtoMapper.GetRole(_users, user);
         return new
         {
             token = access.Token,
+            refreshToken = refresh.Token,
             user = DtoMapper.MapUser(user, role)
         };
+    }
+
+    private string CleanDevice(string? raw)
+    {
+        var text = (raw ?? "").Trim();
+        if (text.Length == 0) text = DescribeAgent(Request.Headers.UserAgent.ToString());
+        return text.Length > 80 ? text[..80] : text;
+    }
+
+    private static string DescribeAgent(string ua)
+    {
+        if (string.IsNullOrWhiteSpace(ua)) return "Naməlum cihaz";
+        var os = ua.Contains("iPhone", StringComparison.OrdinalIgnoreCase) || ua.Contains("iPad", StringComparison.OrdinalIgnoreCase) ? "iPhone"
+            : ua.Contains("Android", StringComparison.OrdinalIgnoreCase) ? "Android"
+            : ua.Contains("Windows", StringComparison.OrdinalIgnoreCase) ? "Windows"
+            : ua.Contains("Mac", StringComparison.OrdinalIgnoreCase) ? "Mac"
+            : "Cihaz";
+        var browser = ua.Contains("Edg/", StringComparison.Ordinal) ? "Edge"
+            : ua.Contains("Chrome/", StringComparison.Ordinal) ? "Chrome"
+            : ua.Contains("Firefox/", StringComparison.Ordinal) ? "Firefox"
+            : ua.Contains("Safari/", StringComparison.Ordinal) ? "Safari"
+            : "Brauzer";
+        return $"{browser} · {os}";
     }
 }

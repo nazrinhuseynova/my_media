@@ -5,6 +5,7 @@ import Button from "../../../components/ui/Button";
 import { validateOtp } from "../../../utils/validators";
 import { authApi, authMessage } from "../../../features/auth/services/authApi";
 import { useAuthStore } from "../../../features/auth/store/useAuthStore";
+import { deviceLabel } from "../../../features/auth/accountVault";
 
 export default function OtpPage() {
   const loc = useLocation();
@@ -34,7 +35,7 @@ export default function OtpPage() {
     }
     setBusy(true);
     try {
-      const data = await authApi.verifyOtp({ code: code.trim(), userId: loc.state?.userId });
+      const data = await authApi.verifyOtp({ code: code.trim(), userId: loc.state?.userId, device: deviceLabel() });
       if (loc.state?.mode === "reset") {
         navigate("/reset-password", { state: { resetToken: data.resetToken } });
         return;
@@ -44,8 +45,9 @@ export default function OtpPage() {
         return;
       }
       localStorage.setItem("pulse_token", data.token);
+      if (data.refreshToken) localStorage.setItem("pulse_refresh", data.refreshToken);
       setUser(data.user);
-      navigate("/");
+      window.location.assign("/");
     } catch (err) {
       setError(authMessage(err, "Kod yanlışdır"));
     } finally {

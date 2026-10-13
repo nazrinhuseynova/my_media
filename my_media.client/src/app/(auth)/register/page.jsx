@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import Input from "../../../components/ui/Input";
 import Button from "../../../components/ui/Button";
 import { validateRegister } from "../../../utils/validators";
@@ -9,6 +9,8 @@ import SocialAuthSheet from "../../../features/auth/components/SocialAuthSheet";
 
 export default function RegisterPage() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const adding = params.get("add") === "1";
   const social = useAuthStore((s) => s.social);
   const [values, setValues] = useState({
     firstName: "",
@@ -51,12 +53,12 @@ export default function RegisterPage() {
     }
   }
 
-  async function provider({ email, fullName }) {
+  async function provider(payload) {
     setBusy(true);
     try {
-      await social(socialKind, { email, fullName: fullName || `${values.firstName} ${values.lastName}`.trim() });
+      await social(socialKind, { ...payload, fullName: payload.fullName || `${values.firstName} ${values.lastName}`.trim() });
       setSocialKind("");
-      navigate("/");
+      window.location.assign("/");
     } finally {
       setBusy(false);
     }
@@ -90,7 +92,7 @@ export default function RegisterPage() {
             Apple ilə qeydiyyat
           </Button>
         </div>
-        <p className="muted auth-switch-inline">Hesabın var? <Link to="/login">Giriş</Link></p>
+        <p className="muted auth-switch-inline">Hesabın var? <Link to={adding ? "/login?add=1" : "/login"}>Giriş</Link></p>
       </div>
       <SocialAuthSheet
         kind={socialKind}

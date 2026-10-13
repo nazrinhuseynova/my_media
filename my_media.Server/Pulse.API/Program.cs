@@ -16,6 +16,7 @@ using Pulse.Infrastructure.Files;
 using Pulse.Infrastructure.Mail;
 using Pulse.Infrastructure.Notifications;
 using Pulse.Infrastructure.Persistence;
+using Pulse.API.Hosted;
 using Pulse.Infrastructure.Realtime;
 
 var contentRoot = Directory.GetCurrentDirectory();
@@ -66,6 +67,9 @@ builder.Services
         options.Password.RequireUppercase = false;
         options.Password.RequireNonAlphanumeric = false;
         options.User.RequireUniqueEmail = true;
+        options.Lockout.MaxFailedAccessAttempts = 5;
+        options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(5);
+        options.Lockout.AllowedForNewUsers = true;
     })
     .AddRoles<IdentityRole<Guid>>()
     .AddEntityFrameworkStores<AppDbContext>()
@@ -108,11 +112,37 @@ builder.Services
                     context.Token = accessToken;
                 }
                 return Task.CompletedTask;
+            },
+            OnTokenValidated = async context =>
+            {
+                var principal = context.Principal;
+                if (principal?.FindFirst("purpose")?.Value == "password-reset")
+                {
+                    context.Fail("Bu token yalnız şifrə üçündür");
+                    return;
+                }
+
+                var userId = principal?.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                    ?? principal?.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+                if (string.IsNullOrWhiteSpace(userId))
+                {
+                    context.Fail("Token istifadəçi id-si yoxdur");
+                    return;
+                }
+
+                var users = context.HttpContext.RequestServices.GetRequiredService<UserManager<AppUser>>();
+                var user = await users.FindByIdAsync(userId);
+                var stamp = principal?.FindFirst("sst")?.Value;
+                if (user == null || !user.IsActive || user.IsBanned || string.IsNullOrEmpty(stamp) || stamp != user.SecurityStamp)
+                {
+                    context.Fail("Hesab aktiv deyil");
+                }
             }
         };
     });
 
 builder.Services.AddAuthorization();
+builder.Services.AddHostedService<ScheduledPostNotifier>();
 
 builder.Services.AddCors(options =>
 {

@@ -2,30 +2,29 @@ import { useEffect, useState } from "react";
 import Modal from "../../../components/ui/Modal/Modal";
 import Input from "../../../components/ui/Input";
 import Button from "../../../components/ui/Button";
-import { isEmail } from "../../../utils/validators";
 import { authMessage } from "../services/authApi";
 
 export default function SocialAuthSheet({ kind, open, onClose, onSubmit, busy }) {
-  const [email, setEmail] = useState("");
+  const [idToken, setIdToken] = useState("");
   const [fullName, setFullName] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
     if (!open) return;
-    setEmail("");
+    setIdToken("");
     setFullName("");
     setError("");
   }, [open, kind]);
 
   async function submit(e) {
     e.preventDefault();
-    if (!isEmail(email)) {
-      setError("Düzgün email yazın");
+    if (idToken.trim().length < 20) {
+      setError("Google və ya Apple id token lazımdır");
       return;
     }
     setError("");
     try {
-      await onSubmit({ email: email.trim(), fullName: fullName.trim() });
+      await onSubmit({ idToken: idToken.trim(), fullName: fullName.trim() });
     } catch (err) {
       setError(authMessage(err, "Daxil olmaq alınmadı"));
     }
@@ -36,14 +35,13 @@ export default function SocialAuthSheet({ kind, open, onClose, onSubmit, busy })
   return (
     <Modal title={title} open={open} onClose={onClose}>
       <form className="social-sheet-form" autoComplete="off" onSubmit={submit}>
-        <p className="muted">Email yazın. Bu email ilə hesab tapılacaq, yoxdursa yeni hesab açılacaq.</p>
+        <p className="muted">Email yazmaqla başqa hesaba girmək olmur. Provayderin verdiyi id token lazımdır.</p>
         <input tabIndex={-1} aria-hidden="true" autoComplete="email" style={{ position: "absolute", left: "-9999px", height: 0, width: 0, opacity: 0 }} />
         <Input
           type="text"
-          inputMode="email"
-          label="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          label="Id token"
+          value={idToken}
+          onChange={(e) => setIdToken(e.target.value)}
           error={error}
           autoComplete="off"
           autoCorrect="off"

@@ -5,12 +5,14 @@ import { useNotificationStore } from "../../../stores/useNotificationStore";
 import { useTheme } from "../../../providers/ThemeProvider";
 import Icon from "../../ui/Icon";
 import Avatar from "../../ui/Avatar";
+import { useAccountSheet } from "../../../features/auth/components/AccountSheet";
 
 export default function Sidebar() {
   const user = useAuthStore((s) => s.user);
   const unread = useNotificationStore((s) => s.items.filter((n) => !n.read).length);
   const setCreateOpen = useAppStore((s) => s.setCreateOpen);
   const { toggle, theme } = useTheme();
+  const showAccounts = useAccountSheet((s) => s.show);
 
   return (
     <aside className="sidebar">
@@ -60,6 +62,13 @@ export default function Sidebar() {
       ) : null}
       <button className="nav-item nav-more" onClick={toggle} title={theme === "dark" ? "Açıq tema" : "Qaranlıq tema"}>
         <Icon name="theme" /><span>{theme === "dark" ? "Açıq tema" : "Qaranlıq tema"}</span>
+      </button>
+      <button type="button" className="nav-account" onClick={showAccounts}>
+        <Avatar src={user?.avatar} alt="" />
+        <span>
+          <strong>@{user?.username}</strong>
+          <span>Hesablar</span>
+        </span>
       </button>
     </aside>
   );

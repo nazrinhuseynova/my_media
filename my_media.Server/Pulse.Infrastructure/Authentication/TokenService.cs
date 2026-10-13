@@ -21,7 +21,7 @@ public class TokenService : ITokenService
         _userManager = userManager;
     }
 
-    public async Task<(string Token, DateTime ExpiresAt)> CreateAccessTokenAsync(AppUser user)
+    public async Task<(string Token, DateTime ExpiresAt)> CreateAccessTokenAsync(AppUser user, Guid sessionId)
     {
         var key = _configuration["Jwt:Key"] ?? throw new InvalidOperationException("Jwt key yoxdur");
         var minutes = int.Parse(_configuration["Jwt:AccessTokenExpirationMinutes"] ?? "120");
@@ -32,7 +32,9 @@ public class TokenService : ITokenService
             new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
             new(ClaimTypes.NameIdentifier, user.Id.ToString()),
             new(ClaimTypes.Name, user.UserName ?? ""),
-            new(ClaimTypes.Email, user.Email ?? "")
+            new(ClaimTypes.Email, user.Email ?? ""),
+            new("sst", user.SecurityStamp ?? ""),
+            new("sid", sessionId.ToString())
         };
 
         var roles = await _userManager.GetRolesAsync(user);

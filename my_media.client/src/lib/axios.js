@@ -1,4 +1,5 @@
 import axios from "axios";
+import { dropActiveAccount, touchSession } from "../features/auth/accountVault";
 
 const API_URL = process.env.REACT_APP_API_URL || "http://localhost:5017";
 
@@ -16,6 +17,8 @@ const AUTH_OPEN = [
   "/api/auth/forgot-password",
   "/api/auth/reset-password",
   "/api/auth/resend-otp",
+  "/api/auth/refresh",
+  "/api/auth/logout",
 ];
 
 http.interceptors.request.use((config) => {
@@ -28,12 +31,32 @@ http.interceptors.request.use((config) => {
 
 http.interceptors.response.use(
   (res) => res,
-  (error) => {
+  async (error) => {
     const status = error.response?.status;
     const url = error.config?.url || "";
     const openAuth = AUTH_OPEN.some((path) => url.includes(path));
+    const config = error.config;
+    if (status === 401 && config && !config._retry && !openAuth) {
+      const refresh = localStorage.getItem("pulse_refresh");
+      if (refresh) {
+        config._retry = true;
+        try {
+          const { data } = await axios.post(`${API_URL}/api/auth/refresh`, { refreshToken: refresh });
+          touchSession(refresh, data.token, data.refreshToken, data.user);
+          config.headers.Authorization = `Bearer ${data.token}`;
+          return http(config);
+        } catch {
+        }
+      }
+    }
     if (status === 401 && !openAuth) {
-      localStorage.removeItem("pulse_token");
+      const next = dropActiveAccount();
+      if (next) {
+        localStorage.setItem("pulse_token", next.token);
+        localStorage.setItem("pulse_refresh", next.refreshToken);
+        window.location.assign("/");
+        return Promise.reject(error);
+      }
       import("../features/auth/store/useAuthStore").then(({ useAuthStore }) => {
         useAuthStore.setState({ user: null, loading: false });
       });

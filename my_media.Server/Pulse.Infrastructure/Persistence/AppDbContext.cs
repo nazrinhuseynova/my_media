@@ -123,6 +123,10 @@ public class AppDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, Guid>
             .WithMany()
             .HasForeignKey(p => p.RepostOfId)
             .OnDelete(DeleteBehavior.NoAction);
+        builder.Entity<Post>().Property(p => p.MentionsSent).HasDefaultValue(true);
+        builder.Entity<AppUser>().Property(u => u.ProfileViewHistory).HasDefaultValue(true);
+        builder.Entity<RefreshToken>().Property(t => t.DeviceName).HasMaxLength(80).HasDefaultValue("");
+        builder.Entity<RefreshToken>().Property(t => t.LastUsedAt).HasDefaultValueSql("GETUTCDATE()");
 
         builder.Entity<CloseFriend>().HasIndex(x => new { x.OwnerId, x.FriendId }).IsUnique();
         builder.Entity<UserMute>().HasIndex(x => new { x.UserId, x.MutedId }).IsUnique();

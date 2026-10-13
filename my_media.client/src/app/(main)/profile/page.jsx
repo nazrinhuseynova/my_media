@@ -5,8 +5,19 @@ import { useAuthStore } from "../../../features/auth/store/useAuthStore";
 import Avatar from "../../../components/ui/Avatar";
 import Button from "../../../components/ui/Button";
 import Modal from "../../../components/ui/Modal";
-import { formatCount } from "../../../utils/formatDate";
-import ProfileGrid from "../../../features/profile/components/ProfileGrid";
+import { formatCount, asUtc } from "../../../utils/formatDate";
+import { notify } from "../../../stores/useNoticeStore";
+import { useAccountSheet } from "../../../features/auth/components/AccountSheet";
+
+const MONTHS = ["yanvar", "fevral", "mart", "aprel", "may", "iyun", "iyul", "avqust", "sentyabr", "oktyabr", "noyabr", "dekabr"];
+
+function formatSeen(iso) {
+  const date = asUtc(iso);
+  if (!date || Number.isNaN(date.getTime())) return "";
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${date.getDate()} ${MONTHS[date.getMonth()]}, ${hours}:${minutes}`;
+}
 
 function followLabel(relation) {
   if (relation === "following") return "İzləmə";
@@ -17,15 +28,25 @@ function followLabel(relation) {
 export default function ProfilePage() {
   const { username } = useParams();
   const me = useAuthStore((s) => s.user);
+  const showAccounts = useAccountSheet((s) => s.show);
   const [data, setData] = useState(null);
   const [list, setList] = useState(null);
   const [highlights, setHighlights] = useState([]);
   const [openHighlight, setOpenHighlight] = useState(null);
   const [views, setViews] = useState(null);
 
-  async function load() {
-    const d = await api.get(`/api/users/${username}`);
-    setData(d);
+  async function load(nextPage = 1) {
+    const d = await api.get(`/api/users/${username}`, { params: { page: nextPage, pageSize: 12 } });
+    const postPage = Array.isArray(d.posts)
+      ? { items: d.posts, totalCount: d.posts.length, hasMore: false, page: 1 }
+      : { items: d.posts?.items || [], totalCount: d.posts?.totalCount || 0, hasMore: !!d.posts?.hasMore, page: d.posts?.page || 1 };
+    setData((prev) => ({
+      ...d,
+      posts: nextPage > 1 && prev ? [...prev.posts, ...postPage.items] : postPage.items,
+      postCount: postPage.totalCount,
+      hasMorePosts: postPage.hasMore,
+      postsPage: postPage.page,
+    }));
     api.get(`/api/users/${username}/highlights`).then(setHighlights).catch(() => setHighlights([]));
   }
 
@@ -40,11 +61,16 @@ export default function ProfilePage() {
 
   async function follow() {
     await api.post(`/api/users/${user.id}/follow`);
+    if (relation === "following") notify("İzləmə dayandırıldı");
+    else if (user.isPrivate && relation !== "requested") notify("İzləmə sorğusu göndərildi");
+    else if (relation === "requested") notify("İzləmə sorğusu geri alındı");
+    else notify("İzlədin");
     load();
   }
 
   async function block() {
     await api.post(`/api/users/${user.id}/block`);
+    notify(blocked ? "Blokdan çıxarıldı" : "Bloklandı");
     load();
   }
 
@@ -64,7 +90,12 @@ export default function ProfilePage() {
           <div className="profile-main">
             <div className="profile-title-row">
               <div>
-                <h2 className="profile-username">{user.username}</h2>
+                {isMe ? (
+                  <button type="button" className="profile-account-btn" onClick={showAccounts} aria-haspopup="dialog">
+                    <h2 className="profile-username">{user.username}</h2>
+                    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M5 7.5 10 12.5 15 7.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  </button>
+                ) : <h2 className="profile-username">{user.username}</h2>}
                 <p className="profile-fullname">{user.fullName}</p>
               </div>
               <div className="profile-actions">
@@ -77,11 +108,11 @@ export default function ProfilePage() {
                   <>
                     <Button onClick={follow}>{followLabel(relation)}</Button>
                     <Button variant="ghost" onClick={block}>{blocked ? "Blokdan çıxar" : "Blokla"}</Button>
-                    <Button variant="ghost" onClick={async () => { const res = await api.post(`/api/users/${user.id}/mute`); setData({ ...data, muted: res.muted }); }}>{data.muted ? "Səsi aç" : "Səssiz"}</Button>
-                    <Button variant="ghost" onClick={async () => { const res = await api.post(`/api/close-friends/${user.id}`); setData({ ...data, closeFriend: res.closeFriend }); }}>{data.closeFriend ? "Çevrədən çıxar" : "Yaxın çevrə"}</Button>
+                    <Button variant="ghost" onClick={async () => { const res = await api.post(`/api/users/${user.id}/mute`); setData({ ...data, muted: res.muted }); notify(res.muted ? "Səssizə alındı" : "Səs açıldı"); }}>{data.muted ? "Səsi aç" : "Səssiz"}</Button>
+                    <Button variant="ghost" onClick={async () => { const res = await api.post(`/api/close-friends/${user.id}`); setData({ ...data, closeFriend: res.closeFriend }); notify(res.closeFriend ? "Yaxın çevrəyə əlavə olundu" : "Yaxın çevrədən çıxarıldı"); }}>{data.closeFriend ? "Çevrədən çıxar" : "Yaxın çevrə"}</Button>
                     <Button
                       variant="ghost"
-                      onClick={() => api.post("/api/reports", { targetType: "user", targetId: user.id, reason: "Uyğunsuz hesab" })}
+                      onClick={async () => { await api.post("/api/reports", { targetType: "user", targetId: user.id, reason: "Uyğunsuz hesab" }); notify("Şikayət göndərildi"); }}
                     >
                       Şikayət et
                     </Button>
@@ -92,7 +123,7 @@ export default function ProfilePage() {
 
             <div className="profile-stats">
               <div className="profile-stat">
-                <strong>{posts.length}</strong>
+                <strong>{data.postCount ?? posts.length}</strong>
                 <span>paylaşım</span>
               </div>
               <button className="profile-stat" type="button" onClick={() => openList("followers")}>
@@ -127,7 +158,12 @@ export default function ProfilePage() {
       ) : null}
 
       {posts.length && !hidden ? (
-        <ProfileGrid posts={posts} />
+        <>
+          <ProfileGrid posts={posts} />
+          {data.hasMorePosts ? (
+            <button type="button" className="btn btn-ghost" onClick={() => load((data.postsPage || 1) + 1)}>Daha çox</button>
+          ) : null}
+        </>
       ) : (
         <div className="profile-empty">
           <p>{restricted ? "Bu profil bağlıdır" : hidden ? "Bu hesab gizlidir" : "Hələ paylaşım yoxdur"}</p>
@@ -141,15 +177,20 @@ export default function ProfilePage() {
             {item.text ? <p>{item.text}</p> : null}
           </div>
         ))}
-        {isMe && openHighlight ? <Button variant="ghost" type="button" onClick={async () => { await api.delete(`/api/highlights/${openHighlight.id}`); setOpenHighlight(null); load(); }}>Sil</Button> : null}
+        {isMe && openHighlight ? <Button variant="ghost" type="button" onClick={async () => { await api.delete(`/api/highlights/${openHighlight.id}`); setOpenHighlight(null); notify("Seçilmiş silindi"); load(); }}>Sil</Button> : null}
       </Modal>
       <Modal open={!!views} onClose={() => setViews(null)} title="Profilə baxanlar">
-        {views?.length ? views.map((row) => (
-          <Link key={row.user.id} to={`/profile/${row.user.username}`} className="chat-item" onClick={() => setViews(null)}>
+        {views?.enabled === false ? (
+          <p className="muted">Baxışlar bağlıdır. Ayarlardan «Profil baxışları»nı açanda son 7 günün siyahısını görürsən.</p>
+        ) : views?.items?.length ? views.items.map((row) => (
+          <Link key={row.user.id} to={`/profile/${row.user.username}`} className="view-row" onClick={() => setViews(null)}>
             <Avatar src={row.user.avatar} />
-            <span><strong>@{row.user.username}</strong>{row.user.isOnline ? <span className="muted"> · onlayn</span> : null}</span>
+            <span>
+              <strong>@{row.user.username}</strong>
+              <small className="muted">{formatSeen(row.seenAt)}</small>
+            </span>
           </Link>
-        )) : <p className="muted">Hələ baxış yoxdur</p>}
+        )) : <p className="muted">Son 7 gündə baxış yoxdur</p>}
       </Modal>
       <Modal open={!!list} onClose={() => setList(null)} title={listTitle}>
         {list?.items.map((u) => (

@@ -14,4 +14,7 @@ export const authApi = {
   changePassword: (body) => api.post("/api/auth/change-password", body),
   deactivate: () => api.post("/api/auth/deactivate"),
   removeAccount: () => api.delete("/api/auth/account"),
+  sessions: () => api.get("/api/auth/sessions"),
+  revokeSession: (id) => api.delete(`/api/auth/sessions/${id}`),
+  revokeOtherSessions: () => api.post("/api/auth/sessions/revoke-others"),
 };

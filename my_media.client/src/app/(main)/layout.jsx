@@ -7,6 +7,8 @@ import CreatePostModal from "../../features/post/components/CreatePostModal";
 import ShareModal from "../../features/post/components/ShareModal";
 import StoryUploader from "../../features/story/components/StoryUploader";
 import CreateReelModal from "../../features/reels/components/CreateReelModal";
+import Notice from "../../components/ui/Notice";
+import AccountSheet from "../../features/auth/components/AccountSheet";
 
 export default function MainLayout() {
   const user = useAuthStore((s) => s.user);
@@ -22,6 +24,7 @@ export default function MainLayout() {
           <span className="brand">Pulse</span>
           <button type="button" className="topbar-share" onClick={() => setCreateOpen(true)}>Paylaş</button>
         </header>
+        <Notice />
         <Outlet />
       </main>
       <BottomNav />
@@ -29,6 +32,7 @@ export default function MainLayout() {
       <ShareModal />
       <StoryUploader />
       <CreateReelModal />
+      <AccountSheet />
     </div>
   );
 }
