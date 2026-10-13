@@ -29,11 +29,13 @@ public class UsersController : ControllerBase
     }
 
     [HttpGet("/api/users/{username}")]
-    public async Task<IActionResult> Get(string username)
+    public async Task<IActionResult> Get(string username, [FromQuery] int page = 1, [FromQuery] int pageSize = 12)
     {
         var user = await _users.Users.FirstOrDefaultAsync(u => u.UserName == username);
         if (user == null) return NotFound(new { message = "Istifadeci tapilmadi" });
         Guid? me = User.Identity?.IsAuthenticated == true ? DtoMapper.GetUserId(User) : null;
+        if ((user.IsBanned || !user.IsActive) && me != user.Id)
+            return NotFound(new { message = "Istifadeci tapilmadi" });
 
         var followers = await _db.Follows.CountAsync(f => f.FollowingId == user.Id);
         var following = await _db.Follows.CountAsync(f => f.FollowerId == user.Id);
@@ -41,25 +43,46 @@ public class UsersController : ControllerBase
             (b.BlockerId == me && b.BlockedId == user.Id) || (b.BlockerId == user.Id && b.BlockedId == me));
         var canSee = !restricted && (!user.IsPrivate || (me.HasValue && (me == user.Id || await _db.Follows.AnyAsync(f => f.FollowerId == me && f.FollowingId == user.Id))));
         var now = DateTime.UtcNow;
-        var posts = canSee
-            ? await _db.Posts.AsNoTracking().AsSplitQuery().Include(p => p.User).Include(p => p.Media).Include(p => p.Likes).ThenInclude(l => l.User).Include(p => p.Comments)
+        var paging = Paging.Normalize(page, pageSize, 12, 24);
+        var postQuery = _db.Posts.AsNoTracking().Where(p =>
+            p.UserId == user.Id && !p.IsDeleted && !p.IsArchived && !p.IsDraft
+            && (me == user.Id || p.ScheduledAt == null || p.ScheduledAt <= now));
+        var postTotal = canSee ? await postQuery.CountAsync() : 0;
+        var postIds = canSee
+            ? await postQuery
+                .OrderByDescending(p => p.IsPinned)
+                .ThenByDescending(p => p.ScheduledAt ?? p.CreatedAt)
+                .Skip((paging.Page - 1) * paging.PageSize)
+                .Take(paging.PageSize)
+                .Select(p => p.Id)
+                .ToListAsync()
+            : new List<Guid>();
+        var posts = postIds.Count == 0
+            ? new List<Post>()
+            : await _db.Posts.AsNoTracking().AsSplitQuery()
+                .Include(p => p.User).Include(p => p.Media).Include(p => p.Likes).ThenInclude(l => l.User).Include(p => p.Comments)
                 .Include(p => p.Tags).ThenInclude(t => t.User)
                 .Include(p => p.PollOptions).ThenInclude(o => o.Votes)
-                .Where(p => p.UserId == user.Id && !p.IsDeleted && !p.IsArchived && !p.IsDraft && (me == user.Id || p.ScheduledAt == null || p.ScheduledAt <= now))
-                .OrderByDescending(p => p.IsPinned)
-                .ThenByDescending(p => p.ScheduledAt ?? p.CreatedAt).ToListAsync()
-            : new List<Post>();
-        if (me.HasValue && me != user.Id && !restricted)
+                .Where(p => postIds.Contains(p.Id))
+                .ToListAsync();
+        var rank = postIds.Select((id, index) => (id, index)).ToDictionary(x => x.id, x => x.index);
+        posts = posts.OrderBy(p => rank[p.Id]).ToList();
+        if (canSee && me.HasValue && me != user.Id)
         {
-            var seen = await _db.ProfileViews.FirstOrDefaultAsync(v => v.ProfileId == user.Id && v.ViewerId == me);
-            if (seen == null)
+            var sharesVisits = await _users.Users.Where(u => u.Id == me).Select(u => u.ProfileViewHistory).FirstOrDefaultAsync();
+            if (sharesVisits)
             {
-                var view = new ProfileView { ProfileId = user.Id, ViewerId = me.Value };
-                _db.ProfileViews.Add(view);
-                _db.Entry(view).State = EntityState.Added;
+                var seen = await _db.ProfileViews.FirstOrDefaultAsync(v => v.ProfileId == user.Id && v.ViewerId == me);
+                if (seen == null)
+                {
+                    var view = new ProfileView { ProfileId = user.Id, ViewerId = me.Value };
+                    _db.ProfileViews.Add(view);
+                    _db.Entry(view).State = EntityState.Added;
+                }
+                else seen.CreatedAt = DateTime.UtcNow;
+                await _db.SaveChangesAsync();
             }
-            else seen.CreatedAt = DateTime.UtcNow;
-            await _db.SaveChangesAsync();
+            await _db.ProfileViews.Where(v => v.CreatedAt < DateTime.UtcNow.AddDays(-7)).ExecuteDeleteAsync();
         }
 
         var relation = "none";
@@ -68,15 +91,20 @@ public class UsersController : ControllerBase
         else if (me.HasValue && await _db.FollowRequests.AnyAsync(r => r.FromId == me && r.ToId == user.Id && r.Status == "pending")) relation = "requested";
 
         var role = await DtoMapper.GetRole(_users, user);
-        var savedIds = me.HasValue
-            ? (await _db.SavedPosts.Where(s => s.UserId == me.Value).Select(s => s.PostId).ToListAsync()).ToHashSet()
+        var savedIds = me.HasValue && postIds.Count > 0
+            ? (await _db.SavedPosts.AsNoTracking().Where(s => s.UserId == me.Value && postIds.Contains(s.PostId)).Select(s => s.PostId).ToListAsync()).ToHashSet()
             : new HashSet<Guid>();
+        var postPage = PagedResult<object>.Create(
+            posts.Select(p => DtoMapper.MapPost(p, me, _db, savedIds)).ToList(),
+            paging.Page,
+            paging.PageSize,
+            postTotal);
         return Ok(new
         {
             user = DtoMapper.MapUser(user, role),
             followers,
             following,
-            posts = posts.Select(p => DtoMapper.MapPost(p, me, _db, savedIds)),
+            posts = postPage,
             relation,
             blocked = me.HasValue && await _db.Blocks.AnyAsync(b => b.BlockerId == me && b.BlockedId == user.Id),
             restricted,
@@ -92,7 +120,7 @@ public class UsersController : ControllerBase
         if (user == null) return NotFound();
         if (!await CanListPeople(user)) return Ok(Array.Empty<object>());
         var ids = await _db.Follows.Where(f => f.FollowingId == user.Id).Select(f => f.FollowerId).ToListAsync();
-        var list = await _users.Users.Where(u => ids.Contains(u.Id)).ToListAsync();
+        var list = await _users.Users.Where(u => ids.Contains(u.Id) && u.IsActive && !u.IsBanned).ToListAsync();
         return Ok(list.Select(u => DtoMapper.MapUser(u)));
     }
 
@@ -103,7 +131,7 @@ public class UsersController : ControllerBase
         if (user == null) return NotFound();
         if (!await CanListPeople(user)) return Ok(Array.Empty<object>());
         var ids = await _db.Follows.Where(f => f.FollowerId == user.Id).Select(f => f.FollowingId).ToListAsync();
-        var list = await _users.Users.Where(u => ids.Contains(u.Id)).ToListAsync();
+        var list = await _users.Users.Where(u => ids.Contains(u.Id) && u.IsActive && !u.IsBanned).ToListAsync();
         return Ok(list.Select(u => DtoMapper.MapUser(u)));
     }
 
@@ -113,7 +141,7 @@ public class UsersController : ControllerBase
         var me = DtoMapper.GetUserId(User);
         if (id == me) return BadRequest(new { message = "Ozunu izleye bilmersen" });
         var target = await _users.FindByIdAsync(id.ToString());
-        if (target == null) return NotFound();
+        if (target == null || !target.IsActive || target.IsBanned) return NotFound(new { message = "Istifadeci tapilmadi" });
         if (await _db.Blocks.AnyAsync(b => (b.BlockerId == me && b.BlockedId == id) || (b.BlockerId == id && b.BlockedId == me)))
             return StatusCode(403, new { message = "Bu profil baglidir" });
         var exists = await _db.Follows.FirstOrDefaultAsync(f => f.FollowerId == me && f.FollowingId == id);
@@ -196,6 +224,12 @@ public class UsersController : ControllerBase
             }
         }
         if (body.IsPrivate.HasValue) user.IsPrivate = body.IsPrivate.Value;
+        if (body.ProfileViewHistory.HasValue && body.ProfileViewHistory.Value != user.ProfileViewHistory)
+        {
+            user.ProfileViewHistory = body.ProfileViewHistory.Value;
+            if (!user.ProfileViewHistory)
+                await _db.ProfileViews.Where(v => v.ViewerId == user.Id).ExecuteDeleteAsync();
+        }
         user.UpdatedAt = DateTime.UtcNow;
         await _users.UpdateAsync(user);
         var role = await DtoMapper.GetRole(_users, user);
@@ -222,7 +256,7 @@ public class UsersController : ControllerBase
     public async Task<IActionResult> Accept(Guid id)
     {
         var me = DtoMapper.GetUserId(User);
-        var req = await _db.FollowRequests.FirstOrDefaultAsync(r => r.Id == id && r.ToId == me);
+        var req = await _db.FollowRequests.FirstOrDefaultAsync(r => r.Id == id && r.ToId == me && r.Status == "pending");
         if (req == null) return NotFound();
         if (await _db.Blocks.AnyAsync(b =>
                 (b.BlockerId == me && b.BlockedId == req.FromId) || (b.BlockerId == req.FromId && b.BlockedId == me)))
@@ -231,6 +265,7 @@ public class UsersController : ControllerBase
         var already = await _db.Follows.AnyAsync(f => f.FollowerId == req.FromId && f.FollowingId == me);
         if (!already) _db.Follows.Add(new Follow { FollowerId = req.FromId, FollowingId = me });
         await _db.SaveChangesAsync();
+        await _notes.AddAsync(req.FromId, me, "follow", me.ToString(), "izləmə sorğusunu qəbul etdi");
         return Ok(new { status = req.Status });
     }
 
@@ -238,7 +273,7 @@ public class UsersController : ControllerBase
     public async Task<IActionResult> Reject(Guid id)
     {
         var me = DtoMapper.GetUserId(User);
-        var req = await _db.FollowRequests.FirstOrDefaultAsync(r => r.Id == id && r.ToId == me);
+        var req = await _db.FollowRequests.FirstOrDefaultAsync(r => r.Id == id && r.ToId == me && r.Status == "pending");
         if (req == null) return NotFound();
         req.Status = "rejected";
         await _db.SaveChangesAsync();
@@ -304,8 +339,17 @@ public class UsersController : ControllerBase
     public async Task<IActionResult> Views()
     {
         var me = DtoMapper.GetUserId(User);
-        var rows = await _db.ProfileViews.Include(v => v.Viewer).Where(v => v.ProfileId == me).OrderByDescending(v => v.CreatedAt).Take(30).ToListAsync();
-        return Ok(rows.Select(v => new { user = DtoMapper.MapUser(v.Viewer), seenAt = v.CreatedAt }));
+        var cutoff = DateTime.UtcNow.AddDays(-7);
+        await _db.ProfileViews.Where(v => v.CreatedAt < cutoff).ExecuteDeleteAsync();
+        var enabled = await _users.Users.Where(u => u.Id == me).Select(u => u.ProfileViewHistory).FirstOrDefaultAsync();
+        if (!enabled) return Ok(new { enabled = false, items = Array.Empty<object>() });
+        var rows = await _db.ProfileViews.AsNoTracking()
+            .Include(v => v.Viewer)
+            .Where(v => v.ProfileId == me && v.CreatedAt >= cutoff && v.Viewer.ProfileViewHistory && v.Viewer.IsActive && !v.Viewer.IsBanned)
+            .OrderByDescending(v => v.CreatedAt)
+            .Take(50)
+            .ToListAsync();
+        return Ok(new { enabled = true, items = rows.Select(v => new { user = DtoMapper.MapUser(v.Viewer), seenAt = v.CreatedAt }) });
     }
 
     [HttpPost("/api/hashtags/{tag}/follow")]
@@ -313,6 +357,7 @@ public class UsersController : ControllerBase
     {
         var me = DtoMapper.GetUserId(User);
         var name = tag.Trim().TrimStart('#').ToLower();
+        if (name.Length == 0) return BadRequest(new { message = "Etiket yaz" });
         var row = await _db.HashtagFollows.FirstOrDefaultAsync(h => h.UserId == me && h.Tag == name);
         if (row != null) _db.HashtagFollows.Remove(row);
         else
@@ -346,4 +391,5 @@ public class ProfileBody
     public string? Avatar { get; set; }
     public string? AvatarExtension { get; set; }
     public bool? IsPrivate { get; set; }
+    public bool? ProfileViewHistory { get; set; }
 }

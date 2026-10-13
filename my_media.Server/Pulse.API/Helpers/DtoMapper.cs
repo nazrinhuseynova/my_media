@@ -21,6 +21,7 @@ public static class DtoMapper
             avatar = u.AvatarUrl,
             avatarExtension = u.AvatarExtension,
             isPrivate = u.IsPrivate,
+            profileViewHistory = u.ProfileViewHistory,
             isActive = u.IsActive,
             isBanned = u.IsBanned,
             role,
@@ -71,15 +72,24 @@ public static class DtoMapper
                 avatar = t.User.AvatarUrl
             }).ToList(),
             poll = MapPoll(p, viewerId),
-            repost = p.RepostOf == null ? null : new
+            repost = ShowNested(p.RepostOf, viewerId) ? new
             {
-                id = p.RepostOf.Id.ToString(),
+                id = p.RepostOf!.Id.ToString(),
                 caption = p.RepostOf.Caption,
                 user = p.RepostOf.User == null ? null : MapUser(p.RepostOf.User),
                 media = p.RepostOf.Media.OrderBy(m => m.SortOrder).Select(m => new { type = m.Type, url = m.Url }).ToList()
-            },
+            } : null,
             user = p.User == null ? null : MapUser(p.User)
         };
+    }
+
+    public static bool ShowNested(Post? source, Guid? viewerId)
+    {
+        if (source == null || source.IsDeleted || source.IsArchived || source.IsDraft) return false;
+        if (source.User != null && (source.User.IsBanned || !source.User.IsActive)) return false;
+        if (source.ScheduledAt != null && source.ScheduledAt > DateTime.UtcNow && viewerId != source.UserId) return false;
+        if (source.User?.IsPrivate == true && viewerId != source.UserId) return false;
+        return true;
     }
 
     public static object? MapPoll(Post p, Guid? viewerId)

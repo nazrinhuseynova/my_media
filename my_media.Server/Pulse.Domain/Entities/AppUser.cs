@@ -10,6 +10,7 @@ public class AppUser : IdentityUser<Guid>
     public string? AvatarUrl { get; set; }
     public string AvatarExtension { get; set; } = string.Empty;
     public bool IsPrivate { get; set; }
+    public bool ProfileViewHistory { get; set; } = true;
     public bool IsActive { get; set; } = true;
     public bool IsBanned { get; set; }
     public string Provider { get; set; } = "email";
