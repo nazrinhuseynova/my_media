@@ -105,9 +105,9 @@ export default function SearchPage() {
 
   useEffect(() => {
     Promise.all([
-      api.get("/api/explore").catch(() => ({ items: [] })),
-      api.get("/api/reels").catch(() => []),
-    ]).then(([explore, reels]) => setItems(mixFeed(explore?.items, reels))).finally(() => setReady(true));
+      api.get("/api/explore", { params: { page: 1, pageSize: 12 } }).catch(() => ({ items: [] })),
+      api.get("/api/reels", { params: { page: 1, pageSize: 8 } }).catch(() => ({ items: [] })),
+    ]).then(([explore, reels]) => setItems(mixFeed(explore?.items, reels?.items || reels))).finally(() => setReady(true));
   }, []);
 
   useEffect(() => {

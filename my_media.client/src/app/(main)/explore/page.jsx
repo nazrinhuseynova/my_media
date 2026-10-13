@@ -82,6 +82,7 @@ export default function ExplorePage() {
   const box = useRef(null);
   const slides = useRef([]);
   const touch = useRef(null);
+  const more = useRef({ post: 1, reel: 1, postMore: false, reelMore: false, busy: false });
 
   useEffect(() => {
     loadStories();
@@ -90,14 +91,15 @@ export default function ExplorePage() {
   useEffect(() => {
     let alive = true;
     Promise.all([
-      api.get("/api/explore").catch(() => ({ items: [] })),
-      api.get("/api/reels").catch(() => []),
+      api.get("/api/explore", { params: { page: 1, pageSize: 12 } }).catch(() => ({ items: [] })),
+      api.get("/api/reels", { params: { page: 1, pageSize: 8 } }).catch(() => ({ items: [] })),
       me?.username
         ? api.get(`/api/users/${me.username}/following`).catch(() => [])
         : Promise.resolve([]),
     ]).then(([explore, reels, people]) => {
       if (!alive) return;
-      setClips(asVideos(explore?.items, reels));
+      more.current = { post: 1, reel: 1, postMore: !!explore?.hasMore, reelMore: !!(reels?.hasMore), busy: false };
+      setClips(asVideos(explore?.items, reels?.items || reels));
       setFollowed((Array.isArray(people) ? people : []).map((p) => String(p.id || "").toLowerCase()).filter(Boolean));
     }).finally(() => {
       if (alive) setReady(true);
@@ -121,7 +123,36 @@ export default function ExplorePage() {
   function onScroll() {
     const el = box.current;
     if (!el) return;
-    setActive(Math.round(el.scrollTop / Math.max(el.clientHeight, 1)));
+    const index = Math.round(el.scrollTop / Math.max(el.clientHeight, 1));
+    setActive(index);
+    const cursor = more.current;
+    if (cursor.busy || index < shown.length - 2 || (!cursor.postMore && !cursor.reelMore)) return;
+    cursor.busy = true;
+    const jobs = [];
+    if (cursor.postMore) jobs.push(api.get("/api/explore", { params: { page: cursor.post + 1, pageSize: 12 } }).then((data) => ({ kind: "post", data })));
+    if (cursor.reelMore) jobs.push(api.get("/api/reels", { params: { page: cursor.reel + 1, pageSize: 8 } }).then((data) => ({ kind: "reel", data })));
+    Promise.all(jobs).then((pages) => {
+      let posts = [];
+      let reels = [];
+      pages.forEach((entry) => {
+        const rows = entry.data?.items || [];
+        if (entry.kind === "post") {
+          posts = rows;
+          cursor.post += 1;
+          cursor.postMore = !!entry.data?.hasMore;
+        } else {
+          reels = rows;
+          cursor.reel += 1;
+          cursor.reelMore = !!entry.data?.hasMore;
+        }
+      });
+      setClips((prev) => {
+        const seen = new Set(prev.map((clip) => `${clip.kind}:${clip.id}`));
+        return [...prev, ...asVideos(posts, reels).filter((clip) => !seen.has(`${clip.kind}:${clip.id}`))];
+      });
+    }).finally(() => {
+      cursor.busy = false;
+    });
   }
 
   function goNext() {
@@ -206,7 +237,7 @@ export default function ExplorePage() {
   }
 
   return (
-    <div className="discover-shell" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+    <div className="discover-shell stage-lock" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
       <div className="discover-tabs">
         <button type="button" className={mode === "following" ? "on" : ""} onClick={() => setMode("following")}>
           İzlədiklərin

@@ -12,9 +12,12 @@ body,
 
 body {
   font-family: var(--font);
+  font-weight: 400;
+  letter-spacing: -0.011em;
+  font-feature-settings: "cv11" 1, "ss01" 1;
   background: var(--bg);
   color: var(--text);
-  line-height: 1.5;
+  line-height: 1.45;
   overflow-x: clip;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -89,6 +92,17 @@ ul {
   min-height: 100vh;
   min-width: 0;
   max-width: 100%;
+  padding-bottom: calc(64px + env(safe-area-inset-bottom));
+}
+
+.app-main:has(.stage-lock) {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  max-height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  padding-bottom: 0;
 }
 
 .page {
@@ -110,7 +124,7 @@ ul {
 }
 
 .post-card {
-  border-radius: 20px;
+  border-radius: var(--radius);
 }
 
 .muted {
@@ -159,6 +173,7 @@ ul {
     padding-bottom: calc(64px + env(safe-area-inset-bottom));
   }
 
+  .app-main:has(.stage-lock),
   .app-main:has(.discover-shell) {
     padding-bottom: 0;
   }
