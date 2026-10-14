@@ -1,16 +1,11 @@
 import { Link } from "react-router-dom";
-import { API_ORIGIN } from "../../../utils/upload";
-
-function mediaSrc(url) {
-  if (!url) return "";
-  if (/^(https?:|blob:|data:)/i.test(url)) return url;
-  return `${API_ORIGIN}${url.startsWith("/") ? "" : "/"}${url}`;
-}
+import { mediaSrc } from "../../../utils/upload";
+import { postHref } from "../../../utils/postHref";
 
 export function toMediaTiles(posts, reels) {
   const postTiles = (posts || []).map((p) => ({
     key: `p-${p.id}`,
-    to: `/p/${p.id}`,
+    to: postHref(p),
     url: p.media?.[0]?.url,
     video: p.media?.[0]?.type === "video",
   })).filter((t) => t.url);

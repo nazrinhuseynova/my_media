@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import Input from "../../../components/ui/Input";
 import Button from "../../../components/ui/Button";
@@ -6,7 +6,7 @@ import Avatar from "../../../components/ui/Avatar";
 import { validateLogin } from "../../../utils/validators";
 import { authMessage } from "../../../features/auth/services/authApi";
 import { useAuthStore } from "../../../features/auth/store/useAuthStore";
-import SocialAuthSheet from "../../../features/auth/components/SocialAuthSheet";
+import ProviderButtons from "../../../features/auth/components/ProviderButtons";
 import { readAccounts } from "../../../features/auth/accountVault";
 
 export default function LoginPage() {
@@ -20,7 +20,6 @@ export default function LoginPage() {
   const [errors, setErrors] = useState({});
   const [formError, setFormError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [socialKind, setSocialKind] = useState("");
   const [saved, setSaved] = useState(() => readAccounts());
 
   function change(e) {
@@ -40,7 +39,7 @@ export default function LoginPage() {
     } catch (err) {
       const data = err.response?.data;
       if (data?.needsOtp && data.userId) {
-        navigate("/otp", { state: { userId: data.userId, previewCode: data.previewCode, mode: "register" } });
+        navigate("/otp", { state: { userId: data.userId, mode: "register" } });
         return;
       }
       setFormError(authMessage(err, "Giriş alınmadı"));
@@ -49,16 +48,17 @@ export default function LoginPage() {
     }
   }
 
-  async function provider(payload) {
+  const onToken = useCallback(async (kind, idToken) => {
     setBusy(true);
+    setFormError("");
     try {
-      await social(socialKind, payload);
-      setSocialKind("");
+      await social(kind, { idToken });
       window.location.assign("/");
-    } finally {
+    } catch (err) {
+      setFormError(authMessage(err, "Giriş alınmadı"));
       setBusy(false);
     }
-  }
+  }, [social]);
 
   async function resume(account) {
     setBusy(true);
@@ -103,27 +103,13 @@ export default function LoginPage() {
           {formError ? <p className="error-text">{formError}</p> : null}
           <Button disabled={busy} type="submit">{busy ? "Gözləyin..." : "Daxil ol"}</Button>
         </form>
-        <div className="auth-or"><span>VE YA</span></div>
-        <div className="auth-providers">
-          <Button className="auth-provider" variant="ghost" type="button" onClick={() => { setFormError(""); setSocialKind("google"); }}>
-            Google ilə daxil ol
-          </Button>
-          <Button className="auth-provider" variant="ghost" type="button" onClick={() => { setFormError(""); setSocialKind("apple"); }}>
-            Apple ilə daxil ol
-          </Button>
-          <Link className="auth-forgot" to="/forgot-password">Şifrəni unutmusan?</Link>
-        </div>
+        <div className="auth-or"><span>və ya</span></div>
+        <ProviderButtons busy={busy} onToken={onToken} onError={setFormError} />
+        <Link className="auth-forgot" to="/forgot-password">Şifrəni unutmusan?</Link>
       </div>
       <div className="card auth-card auth-switch">
         <p>Hesabın yoxdur? <Link to={adding ? "/register?add=1" : "/register"}>Qeydiyyatdan keç</Link></p>
       </div>
-      <SocialAuthSheet
-        kind={socialKind}
-        open={Boolean(socialKind)}
-        onClose={() => setSocialKind("")}
-        onSubmit={provider}
-        busy={busy}
-      />
     </div>
   );
 }

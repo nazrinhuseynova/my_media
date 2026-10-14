@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import Input from "../../../components/ui/Input";
 import Button from "../../../components/ui/Button";
 import { validateRegister } from "../../../utils/validators";
 import { authApi, authMessage } from "../../../features/auth/services/authApi";
 import { useAuthStore } from "../../../features/auth/store/useAuthStore";
-import SocialAuthSheet from "../../../features/auth/components/SocialAuthSheet";
+import ProviderButtons from "../../../features/auth/components/ProviderButtons";
 
 export default function RegisterPage() {
   const navigate = useNavigate();
@@ -23,7 +23,6 @@ export default function RegisterPage() {
   const [errors, setErrors] = useState({});
   const [formError, setFormError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [socialKind, setSocialKind] = useState("");
 
   function change(e) {
     setValues({ ...values, [e.target.name]: e.target.value });
@@ -45,7 +44,7 @@ export default function RegisterPage() {
         confirmPassword: values.confirmPassword,
       };
       const data = await authApi.register(payload);
-      navigate("/otp", { state: { userId: data.userId, previewCode: data.previewCode, mode: "register" } });
+      navigate("/otp", { state: { userId: data.userId, mode: "register", contact: payload.contact } });
     } catch (err) {
       setFormError(authMessage(err, "Qeydiyyat alınmadı"));
     } finally {
@@ -53,22 +52,23 @@ export default function RegisterPage() {
     }
   }
 
-  async function provider(payload) {
+  const onToken = useCallback(async (kind, idToken) => {
     setBusy(true);
+    setFormError("");
     try {
-      await social(socialKind, { ...payload, fullName: payload.fullName || `${values.firstName} ${values.lastName}`.trim() });
-      setSocialKind("");
+      await social(kind, { idToken, fullName: `${values.firstName} ${values.lastName}`.trim() });
       window.location.assign("/");
-    } finally {
+    } catch (err) {
+      setFormError(authMessage(err, "Qeydiyyat alınmadı"));
       setBusy(false);
     }
-  }
+  }, [social, values.firstName, values.lastName]);
 
   return (
     <div className="auth-wrap auth-wrap-register">
       <div className="card auth-card">
         <h1 className="brand">Pulse</h1>
-        <p className="muted auth-lead">Email və ya telefon ilə qeydiyyat</p>
+        <p className="muted auth-lead">Email ilə qeydiyyat. Kod emailinə gedir, təsdiqdən sonra hesab açılır.</p>
         <form autoComplete="off" onSubmit={submit}>
           <input tabIndex={-1} aria-hidden="true" autoComplete="username" style={{ position: "absolute", left: "-9999px", height: 0, width: 0, opacity: 0 }} />
           <input type="password" tabIndex={-1} aria-hidden="true" autoComplete="current-password" style={{ position: "absolute", left: "-9999px", height: 0, width: 0, opacity: 0 }} />
@@ -77,30 +77,15 @@ export default function RegisterPage() {
             <Input name="lastName" label="Soyad" value={values.lastName} onChange={change} error={errors.lastName} autoComplete="off" />
           </div>
           <Input name="username" label="Username" value={values.username} onChange={change} error={errors.username} autoComplete="off" />
-          <Input name="contact" label="Email və ya telefon" value={values.contact} onChange={change} error={errors.contact} autoComplete="off" />
+          <Input name="contact" label="Email" value={values.contact} onChange={change} error={errors.contact} autoComplete="off" />
           <Input name="password" type="password" label="Şifrə" value={values.password} onChange={change} error={errors.password} autoComplete="off" />
           <Input name="confirmPassword" type="password" label="Şifrəni təkrarla" value={values.confirmPassword} onChange={change} error={errors.confirmPassword} autoComplete="off" />
           {formError ? <p className="error-text">{formError}</p> : null}
           <Button disabled={busy} type="submit">{busy ? "Gözləyin..." : "Qeydiyyat"}</Button>
         </form>
-        <div className="auth-or"><span>VE YA</span></div>
-        <div className="auth-providers">
-          <Button className="auth-provider" variant="ghost" type="button" onClick={() => { setFormError(""); setSocialKind("google"); }}>
-            Google ilə qeydiyyat
-          </Button>
-          <Button className="auth-provider" variant="ghost" type="button" onClick={() => { setFormError(""); setSocialKind("apple"); }}>
-            Apple ilə qeydiyyat
-          </Button>
-        </div>
+        <ProviderButtons divider busy={busy} onToken={onToken} onError={setFormError} />
         <p className="muted auth-switch-inline">Hesabın var? <Link to={adding ? "/login?add=1" : "/login"}>Giriş</Link></p>
       </div>
-      <SocialAuthSheet
-        kind={socialKind}
-        open={Boolean(socialKind)}
-        onClose={() => setSocialKind("")}
-        onSubmit={provider}
-        busy={busy}
-      />
     </div>
   );
 }

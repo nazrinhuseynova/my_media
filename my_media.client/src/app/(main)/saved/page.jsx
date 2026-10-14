@@ -6,6 +6,7 @@ import Icon from "../../../components/ui/Icon";
 import Button from "../../../components/ui/Button";
 import Input from "../../../components/ui/Input";
 import { notify } from "../../../stores/useNoticeStore";
+import { postHref } from "../../../utils/postHref";
 
 export default function SavedPage() {
   const navigate = useNavigate();
@@ -116,7 +117,7 @@ export default function SavedPage() {
             if (!media?.url) return null;
             return (
               <div key={p.id} className="collection-tile">
-                <Link to={`/p/${p.id}`} className="explore-tile">
+                <Link to={postHref(p)} className="explore-tile">
                   {media.type === "video" ? (
                     <video src={mediaSrc(media.url)} muted playsInline preload="metadata" />
                   ) : (

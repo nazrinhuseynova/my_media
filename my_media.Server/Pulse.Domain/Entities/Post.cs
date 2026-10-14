@@ -7,6 +7,7 @@ public class Post : BaseEntity
     public Guid UserId { get; set; }
     public AppUser User { get; set; } = null!;
     public string Caption { get; set; } = string.Empty;
+    public string Slug { get; set; } = string.Empty;
     public string? Location { get; set; }
     public string Mentions { get; set; } = string.Empty;
     public string Hashtags { get; set; } = string.Empty;

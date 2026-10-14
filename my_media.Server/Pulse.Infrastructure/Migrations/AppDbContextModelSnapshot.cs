@@ -1034,6 +1034,12 @@ namespace Pulse.Infrastructure.Migrations
                     b.Property<DateTime?>("ScheduledAt")
                         .HasColumnType("datetime2");
 
+                    b.Property<string>("Slug")
+                        .IsRequired()
+                        .HasMaxLength(140)
+                        .HasColumnType("nvarchar(140)")
+                        .HasDefaultValue("");
+
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("datetime2");
 
@@ -1043,6 +1049,10 @@ namespace Pulse.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("RepostOfId");
+
+                    b.HasIndex("Slug")
+                        .IsUnique()
+                        .HasFilter("[Slug] <> ''");
 
                     b.HasIndex("UserId");
 

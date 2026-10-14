@@ -1,6 +1,5 @@
 using CloudinaryDotNet;
 using CloudinaryDotNet.Actions;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Pulse.Application.Files;
@@ -18,13 +17,11 @@ public class CloudinaryFileStorageService : IFileStorageService
     };
 
     private readonly IConfiguration _config;
-    private readonly IWebHostEnvironment _env;
     private Cloudinary? _cloudinary;
 
-    public CloudinaryFileStorageService(IConfiguration config, IWebHostEnvironment env)
+    public CloudinaryFileStorageService(IConfiguration config)
     {
         _config = config;
-        _env = env;
     }
 
     public Task<StoredFile> SaveImageAsync(IFormFile file, CancellationToken cancellationToken = default)
@@ -91,14 +88,12 @@ public class CloudinaryFileStorageService : IFileStorageService
             throw new InvalidOperationException("Bu fayl uzantisina icaze yoxdur");
         }
 
-        if (UseLocal())
-        {
-            return await SaveLocalAsync(file, kind, extension, cancellationToken);
-        }
-
         await using var stream = file.OpenReadStream();
         var description = new FileDescription($"{Guid.NewGuid():N}{extension}", stream);
         var cloudinary = Client();
+        var transform = new Transformation().FetchFormat("auto").Quality("auto");
+        if (kind == "image") transform = transform.Width(1600).Crop("limit");
+        else if (kind == "video") transform = transform.Width(1280).Crop("limit");
 
         UploadResult result = kind == "image"
             ? await cloudinary.UploadAsync(new ImageUploadParams
@@ -107,7 +102,8 @@ public class CloudinaryFileStorageService : IFileStorageService
                 Folder = folder,
                 UseFilename = true,
                 UniqueFilename = false,
-                Overwrite = false
+                Overwrite = false,
+                Transformation = transform
             }, cancellationToken)
             : await cloudinary.UploadAsync(new VideoUploadParams
             {
@@ -115,7 +111,8 @@ public class CloudinaryFileStorageService : IFileStorageService
                 Folder = folder,
                 UseFilename = true,
                 UniqueFilename = false,
-                Overwrite = false
+                Overwrite = false,
+                Transformation = transform
             }, cancellationToken);
 
         if (result.Error != null)
@@ -138,37 +135,6 @@ public class CloudinaryFileStorageService : IFileStorageService
         return new StoredFile { Url = url, Extension = storedExtension };
     }
 
-    private bool UseLocal()
-    {
-        var cloud = _config["Cloudinary:CloudName"];
-        var key = _config["Cloudinary:ApiKey"];
-        var secret = _config["Cloudinary:ApiSecret"];
-        return string.IsNullOrWhiteSpace(cloud)
-            || string.IsNullOrWhiteSpace(key)
-            || string.IsNullOrWhiteSpace(secret)
-            || cloud.Equals("local", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private async Task<StoredFile> SaveLocalAsync(IFormFile file, string kind, string extension, CancellationToken cancellationToken)
-    {
-        var root = _env.WebRootPath;
-        if (string.IsNullOrWhiteSpace(root))
-        {
-            root = Path.Combine(_env.ContentRootPath, "wwwroot");
-        }
-
-        var dir = Path.Combine(root, "uploads", kind);
-        Directory.CreateDirectory(dir);
-        var name = $"{Guid.NewGuid():N}{extension}";
-        await using (var input = file.OpenReadStream())
-        await using (var output = File.Create(Path.Combine(dir, name)))
-        {
-            await input.CopyToAsync(output, cancellationToken);
-        }
-
-        return new StoredFile { Url = $"/uploads/{kind}/{name}", Extension = extension };
-    }
-
     private Cloudinary Client()
     {
         if (_cloudinary != null)
@@ -179,7 +145,9 @@ public class CloudinaryFileStorageService : IFileStorageService
         var cloud = _config["Cloudinary:CloudName"];
         var key = _config["Cloudinary:ApiKey"];
         var secret = _config["Cloudinary:ApiSecret"];
-        if (string.IsNullOrWhiteSpace(cloud) || string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(secret))
+        if (string.IsNullOrWhiteSpace(cloud) || string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(secret)
+            || cloud.Equals("local", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("local-dev", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("Cloudinary ayarlari tapilmadi");
         }

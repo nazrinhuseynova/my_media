@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../../../services/api";
+import { postHref } from "../../../utils/postHref";
 
 export default function LocationPage() {
   const { name } = useParams();
@@ -14,7 +15,7 @@ export default function LocationPage() {
       <h2>{loc}</h2>
       <div className="grid">
         {data.items.map((p) => (
-          <Link key={p.id} to={`/p/${p.id}`}><img src={p.media[0]?.url} alt="" /></Link>
+          <Link key={p.id} to={postHref(p)}><img src={p.media[0]?.url} alt="" loading="lazy" /></Link>
         ))}
       </div>
     </div>

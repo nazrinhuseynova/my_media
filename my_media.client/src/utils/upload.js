@@ -5,7 +5,7 @@ export const API_ORIGIN = (process.env.REACT_APP_API_URL || "http://localhost:50
 export function mediaSrc(url) {
   if (!url) return "";
   if (/^(https?:|blob:|data:)/i.test(url)) return url;
-  return `${API_ORIGIN}${url.startsWith("/") ? "" : "/"}${url}`;
+  return "";
 }
 
 export async function uploadFile(file, kind) {

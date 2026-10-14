@@ -8,6 +8,7 @@ import Modal from "../../../components/ui/Modal";
 import { formatCount, asUtc } from "../../../utils/formatDate";
 import { notify } from "../../../stores/useNoticeStore";
 import { useAccountSheet } from "../../../features/auth/components/AccountSheet";
+import { ProfileSkeleton } from "../../../components/ui/Skeleton";
 
 const MONTHS = ["yanvar", "fevral", "mart", "aprel", "may", "iyun", "iyul", "avqust", "sentyabr", "oktyabr", "noyabr", "dekabr"];
 
@@ -54,7 +55,7 @@ export default function ProfilePage() {
     load();
   }, [username]);
 
-  if (!data) return <div className="page"><div className="spinner" /></div>;
+  if (!data) return <ProfileSkeleton />;
   const { user, followers, following, posts, relation, blocked, restricted } = data;
   const isMe = me.id === user.id;
   const hidden = !!restricted || (user.isPrivate && !isMe && relation !== "following");

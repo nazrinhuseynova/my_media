@@ -45,6 +45,7 @@ public static class DtoMapper
         return new
         {
             id = p.Id.ToString(),
+            slug = p.Slug ?? "",
             userId = p.UserId.ToString(),
             media = p.Media.OrderBy(m => m.SortOrder).Select(m => new { type = m.Type, url = m.Url, extension = m.Extension, filter = m.Filter }).ToList(),
             caption = p.Caption,
@@ -75,6 +76,7 @@ public static class DtoMapper
             repost = ShowNested(p.RepostOf, viewerId) ? new
             {
                 id = p.RepostOf!.Id.ToString(),
+                slug = p.RepostOf.Slug ?? "",
                 caption = p.RepostOf.Caption,
                 user = p.RepostOf.User == null ? null : MapUser(p.RepostOf.User),
                 media = p.RepostOf.Media.OrderBy(m => m.SortOrder).Select(m => new { type = m.Type, url = m.Url }).ToList()

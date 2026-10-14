@@ -14,7 +14,6 @@ export default function OtpPage() {
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [seconds, setSeconds] = useState(60);
-  const [previewCode, setPreviewCode] = useState(loc.state?.previewCode || "");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -59,11 +58,10 @@ export default function OtpPage() {
     if (!loc.state?.userId || seconds > 0) return;
     setError("");
     try {
-      const data = await authApi.resendOtp({
+      await authApi.resendOtp({
         userId: loc.state.userId,
         type: loc.state?.mode === "reset" ? "reset" : "register",
       });
-      setPreviewCode(data.previewCode || "");
       setSeconds(60);
     } catch (err) {
       setError(authMessage(err, "Kod göndərilmədi"));
@@ -75,11 +73,14 @@ export default function OtpPage() {
       <div className="card auth-card">
         <h1>Təsdiq</h1>
         <p className="muted">
+          {loc.state?.contact
+            ? `Kod ${loc.state.contact} ünvanına göndərildi. Təsdiqdən sonra qeydiyyat tamamlanır.`
+            : "Kod emailinə göndərildi. Təsdiqdən sonra davam edə bilərsən."}
+          {" "}
           {seconds
-            ? `Kodu yenidən göndərmək üçün ${seconds} san`
+            ? `Yenidən göndərmək üçün ${seconds} san`
             : "Kodu almamısansa, yenidən göndər"}
         </p>
-        {previewCode ? <p className="success-text">Kod: {previewCode}</p> : null}
         <form onSubmit={submit}>
           <Input value={code} onChange={(e) => setCode(e.target.value)} label="6 rəqəmli kod" maxLength={6} error={error} />
           <Button disabled={busy} type="submit">{busy ? "Gözləyin..." : "Təsdiqlə"}</Button>

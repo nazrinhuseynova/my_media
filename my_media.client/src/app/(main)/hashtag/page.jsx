@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../../../services/api";
 import { notify } from "../../../stores/useNoticeStore";
+import { postHref } from "../../../utils/postHref";
 
 export default function HashtagPage() {
   const { tag } = useParams();
@@ -22,7 +23,7 @@ export default function HashtagPage() {
       </div>
       <div className="grid">
         {(data.items || []).map((p) => (
-          <Link key={p.id} to={`/p/${p.id}`}>
+          <Link key={p.id} to={postHref(p)}>
             {p.media?.[0]?.url ? <img src={p.media[0].url} alt="" /> : <span>{p.caption || p.poll?.question || "Yazı"}</span>}
           </Link>
         ))}

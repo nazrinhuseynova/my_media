@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { postApi } from "../../../features/post/services/postApi";
 import { notify } from "../../../stores/useNoticeStore";
+import { postHref } from "../../../utils/postHref";
 
 export default function ShelfPage() {
   const drafts = useLocation().pathname.includes("draft");
@@ -39,7 +40,7 @@ export default function ShelfPage() {
         <div className="settings-mosaic">
           {posts.map((p) => (
             <div key={p.id} className="collection-tile">
-              <Link to={`/p/${p.id}`}>{p.media?.[0]?.url ? <img src={p.media[0].url} alt="" /> : <span>{p.caption || "Yazı"}</span>}</Link>
+              <Link to={postHref(p)}>{p.media?.[0]?.url ? <img src={p.media[0].url} alt="" loading="lazy" /> : <span>{p.caption || "Yazı"}</span>}</Link>
               {drafts ? <button type="button" className="btn btn-primary" onClick={() => publish(p.id)}>Paylaş</button> : null}
               {!drafts ? <button type="button" className="btn btn-ghost" onClick={() => restore(p.id)}>Geri qaytar</button> : null}
             </div>

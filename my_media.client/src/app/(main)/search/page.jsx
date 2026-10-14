@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
+import { postHref } from "../../../utils/postHref";
+import { ListSkeleton } from "../../../components/ui/Skeleton";
 import { api } from "../../../services/api";
 import { useDebounce } from "../../../hooks/useDebounce";
 import Avatar from "../../../components/ui/Avatar";
@@ -89,10 +91,38 @@ function previewPlaces(items) {
   return [...map.entries()].map(([name, count]) => ({ name, count }));
 }
 
+function readTab(value) {
+  return TABS.some((item) => item.id === value) ? value : "all";
+}
+
 export default function SearchPage() {
-  const [q, setQ] = useState("");
+  const [params, setParams] = useSearchParams();
+  const q = params.get("q") || "";
+  const tab = readTab(params.get("tab"));
   const debounced = useDebounce(q, 250);
-  const [tab, setTab] = useState("all");
+
+  function setQ(value) {
+    const next = new URLSearchParams(params);
+    if (value) next.set("q", value);
+    else next.delete("q");
+    next.set("tab", tab);
+    setParams(next, { replace: true });
+  }
+
+  function setTab(value) {
+    const next = new URLSearchParams(params);
+    next.set("tab", readTab(value));
+    if (q) next.set("q", q);
+    else next.delete("q");
+    setParams(next, { replace: true });
+  }
+
+  useEffect(() => {
+    if (params.get("tab")) return;
+    const next = new URLSearchParams(params);
+    next.set("tab", "all");
+    setParams(next, { replace: true });
+  }, [params, setParams]);
   const [users, setUsers] = useState([]);
   const [hashtags, setHashtags] = useState([]);
   const [locations, setLocations] = useState([]);
@@ -211,6 +241,7 @@ export default function SearchPage() {
 
   return (
     <div className="page search-page">
+      {!ready ? <ListSkeleton /> : null}
       <div className="search-anchor" ref={boxRef}>
         <label className="explore-search">
           <Icon name="search" size={18} />
@@ -318,7 +349,7 @@ export default function SearchPage() {
                   {visiblePosts.map((item) => {
                     const media = item.media?.[0];
                     const video = media?.type === "video";
-                    const href = item.kind === "post" ? `/p/${item.id}` : `/reels?v=${item.id}`;
+                    const href = item.kind === "post" ? postHref(item) : `/reels?v=${item.id}`;
                     const title = item.caption || item.poll?.question || (item.kind === "reel" ? "Video" : "Yazı");
                     return (
                       <Link
@@ -424,7 +455,7 @@ export default function SearchPage() {
           {items.map((item) => {
             const media = item.media?.[0];
             const video = media?.type === "video";
-            const href = item.kind === "post" ? `/p/${item.id}` : `/reels?v=${item.id}`;
+            const href = item.kind === "post" ? postHref(item) : `/reels?v=${item.id}`;
             return (
               <Link key={`${item.kind}-${item.id}`} to={href} className="explore-tile">
                 {video ? (

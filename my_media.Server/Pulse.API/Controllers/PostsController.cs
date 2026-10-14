@@ -388,6 +388,9 @@ public class PostsController : ControllerBase
             PollQuestion = hasPoll ? body.Poll!.Question.Trim() : "",
             RepostOfId = body.RepostOfId
         };
+        var usedSlugs = (await _db.Posts.AsNoTracking().Where(p => p.Slug != "").Select(p => p.Slug).ToListAsync())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        post.Slug = SlugText.Unique(string.IsNullOrWhiteSpace(post.Caption) ? post.PollQuestion : post.Caption, post.Id, usedSlugs);
         if (hasPoll)
         {
             var n = 0;
@@ -440,20 +443,25 @@ public class PostsController : ControllerBase
     }
 
     [AllowAnonymous]
-    [HttpGet("/api/posts/{id:guid}")]
-    public async Task<IActionResult> One(Guid id)
+    [HttpGet("/api/posts/{key}")]
+    public async Task<IActionResult> One(string key)
     {
+        if (string.Equals(key, "drafts", StringComparison.OrdinalIgnoreCase) || string.Equals(key, "archived", StringComparison.OrdinalIgnoreCase))
+            return NotFound(new { message = "Paylasim tapilmadi" });
         Guid? me = User.Identity?.IsAuthenticated == true ? DtoMapper.GetUserId(User) : null;
-        var post = await PostsQuery().FirstOrDefaultAsync(p => p.Id == id);
+        var post = Guid.TryParse(key, out var postId)
+            ? await PostsQuery().FirstOrDefaultAsync(p => p.Id == postId)
+            : await PostsQuery().FirstOrDefaultAsync(p => p.Slug == key.Trim().ToLowerInvariant());
         if (post == null || !await CanSee(post, me)) return NotFound(new { message = "Paylasim tapilmadi" });
 
         var comments = await _db.Comments.Include(c => c.User).Include(c => c.Likes).ThenInclude(l => l.User)
-            .Where(c => c.PostId == id).OrderBy(c => c.CreatedAt).ToListAsync();
+            .Where(c => c.PostId == post.Id).OrderBy(c => c.CreatedAt).ToListAsync();
         var reactions = DtoMapper.SummarizeReactions(post.Likes, me);
 
         return Ok(new Dictionary<string, object?>
         {
             ["id"] = post.Id.ToString(),
+            ["slug"] = post.Slug ?? "",
             ["userId"] = post.UserId.ToString(),
             ["media"] = post.Media.OrderBy(m => m.SortOrder).Select(m => new { type = m.Type, url = m.Url, extension = m.Extension, filter = m.Filter }),
             ["caption"] = post.Caption,
@@ -477,6 +485,7 @@ public class PostsController : ControllerBase
             ["repost"] = DtoMapper.ShowNested(post.RepostOf, me) ? new
             {
                 id = post.RepostOf!.Id.ToString(),
+                slug = post.RepostOf.Slug ?? "",
                 caption = post.RepostOf.Caption,
                 user = post.RepostOf.User == null ? null : DtoMapper.MapUser(post.RepostOf.User),
                 media = post.RepostOf.Media.OrderBy(m => m.SortOrder).Select(m => new { type = m.Type, url = m.Url })

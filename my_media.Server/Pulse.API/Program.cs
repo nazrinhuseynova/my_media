@@ -16,6 +16,7 @@ using Pulse.Infrastructure.Files;
 using Pulse.Infrastructure.Mail;
 using Pulse.Infrastructure.Notifications;
 using Pulse.Infrastructure.Persistence;
+using Pulse.API.Helpers;
 using Pulse.API.Hosted;
 using Pulse.Infrastructure.Realtime;
 
@@ -170,17 +171,8 @@ using (var scope = app.Services.CreateScope())
     var roles = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
     await db.Database.MigrateAsync();
     await DbSeeder.SeedAsync(db, users, roles);
+    await PostSlugBackfill.Run(db);
 }
-
-var webRoot = app.Environment.WebRootPath;
-if (string.IsNullOrWhiteSpace(webRoot))
-{
-    webRoot = Path.Combine(app.Environment.ContentRootPath, "wwwroot");
-    app.Environment.WebRootPath = webRoot;
-}
-
-Directory.CreateDirectory(Path.Combine(webRoot, "uploads"));
-app.UseStaticFiles();
 
 if (app.Environment.IsDevelopment())
 {

@@ -17,7 +17,7 @@ export default function ForgotPage() {
     }
     try {
       const data = await authApi.forgot({ contact });
-      navigate("/otp", { state: { userId: data.userId, previewCode: data.previewCode, mode: "reset", contact } });
+      navigate("/otp", { state: { userId: data.userId, mode: "reset", contact } });
     } catch (err) {
       setError(authMessage(err, "İstifadəçi tapılmadı"));
     }

@@ -5,7 +5,7 @@ import Button from "../../../components/ui/Button";
 import { useAuthStore } from "../../../features/auth/store/useAuthStore";
 import { api } from "../../../services/api";
 import { authApi } from "../../../features/auth/services/authApi";
-import { uploadFile, API_ORIGIN } from "../../../utils/upload";
+import { uploadFile, mediaSrc } from "../../../utils/upload";
 import { useNotificationStore } from "../../../stores/useNotificationStore";
 import { isUsername, validatePassword } from "../../../utils/validators";
 import Icon from "../../../components/ui/Icon";
@@ -28,12 +28,6 @@ const LIBRARY = [
   { to: "/archive", icon: "reels", title: "Arxiv", text: "Gizlədilmiş paylaşımlar" },
   { to: "/drafts", icon: "comment", title: "Qaralamalar", text: "Hələ paylaşılmayanlar" },
 ];
-
-function mediaSrc(url) {
-  if (!url) return "";
-  if (/^(https?:|blob:|data:)/i.test(url)) return url;
-  return `${API_ORIGIN}${url.startsWith("/") ? "" : "/"}${url}`;
-}
 
 function errMsg(err, fallback) {
   return err?.response?.data?.message || fallback;

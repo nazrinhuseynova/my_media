@@ -6,6 +6,7 @@ import { useTheme } from "../../../providers/ThemeProvider";
 import Icon from "../../ui/Icon";
 import Avatar from "../../ui/Avatar";
 import { useAccountSheet } from "../../../features/auth/components/AccountSheet";
+import { useLanguage } from "../../../features/i18n/useLanguage";
 
 export default function Sidebar() {
   const user = useAuthStore((s) => s.user);
@@ -13,6 +14,7 @@ export default function Sidebar() {
   const setCreateOpen = useAppStore((s) => s.setCreateOpen);
   const { toggle, theme } = useTheme();
   const showAccounts = useAccountSheet((s) => s.show);
+  const showLanguage = useLanguage((s) => s.show);
 
   return (
     <aside className="sidebar">
@@ -62,6 +64,9 @@ export default function Sidebar() {
       ) : null}
       <button className="nav-item nav-more" onClick={toggle} title={theme === "dark" ? "Açıq tema" : "Qaranlıq tema"}>
         <Icon name="theme" /><span>{theme === "dark" ? "Açıq tema" : "Qaranlıq tema"}</span>
+      </button>
+      <button type="button" className="nav-item" onClick={showLanguage} title="Dil">
+        <Icon name="globe" /><span>Dil</span>
       </button>
       <button type="button" className="nav-account" onClick={showAccounts}>
         <Avatar src={user?.avatar} alt="" />

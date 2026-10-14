@@ -61,11 +61,6 @@ export default defineConfig(({ command }) => ({
                 changeOrigin: true,
                 secure: false,
                 ws: true
-            },
-            '/uploads': {
-                target: apiTarget,
-                changeOrigin: true,
-                secure: false
             }
         },
         port: devPort,

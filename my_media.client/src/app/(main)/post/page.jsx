@@ -9,6 +9,7 @@ import Button from "../../../components/ui/Button";
 import Input from "../../../components/ui/Input";
 import Icon from "../../../components/ui/Icon";
 import { notify } from "../../../stores/useNoticeStore";
+import { FeedSkeleton } from "../../../components/ui/Skeleton";
 
 export default function PostPage() {
   const { id } = useParams();
@@ -28,13 +29,17 @@ export default function PostPage() {
     load();
   }, [id]);
 
+  useEffect(() => {
+    if (post?.slug && id !== post.slug) navigate(`/p/${post.slug}`, { replace: true });
+  }, [post, id, navigate]);
+
   function goBack() {
     const idx = window.history.state?.idx;
     if (typeof idx === "number" && idx > 0) navigate(-1);
     else navigate("/");
   }
 
-  if (!post) return <div className="page"><div className="spinner" /></div>;
+  if (!post) return <FeedSkeleton />;
 
   const mine = me?.id === post.userId;
 

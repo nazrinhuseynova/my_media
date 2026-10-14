@@ -124,6 +124,8 @@ public class AppDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, Guid>
             .HasForeignKey(p => p.RepostOfId)
             .OnDelete(DeleteBehavior.NoAction);
         builder.Entity<Post>().Property(p => p.MentionsSent).HasDefaultValue(true);
+        builder.Entity<Post>().Property(p => p.Slug).HasMaxLength(140).HasDefaultValue("").ValueGeneratedNever();
+        builder.Entity<Post>().HasIndex(p => p.Slug).IsUnique().HasFilter("[Slug] <> ''");
         builder.Entity<AppUser>().Property(u => u.ProfileViewHistory).HasDefaultValue(true);
         builder.Entity<RefreshToken>().Property(t => t.DeviceName).HasMaxLength(80).HasDefaultValue("");
         builder.Entity<RefreshToken>().Property(t => t.LastUsedAt).HasDefaultValueSql("GETUTCDATE()");

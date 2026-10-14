@@ -3,14 +3,8 @@ import { Link } from "react-router-dom";
 import { api } from "../../../services/api";
 import { useAppStore } from "../../../stores/useAppStore";
 import { formatCount } from "../../../utils/formatDate";
-import { resolveMusic, API_ORIGIN } from "../../../utils/upload";
+import { resolveMusic, mediaSrc } from "../../../utils/upload";
 import Icon from "../../../components/ui/Icon";
-
-function mediaSrc(url) {
-  if (!url) return "";
-  if (/^(https?:|blob:|data:)/i.test(url)) return url;
-  return `${API_ORIGIN}${url.startsWith("/") ? "" : "/"}${url}`;
-}
 
 export default function ReelPlayer({ reel, active }) {
   const videoRef = useRef(null);

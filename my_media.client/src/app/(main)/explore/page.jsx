@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../../../services/api";
 import { useAuthStore } from "../../../features/auth/store/useAuthStore";
 import { useStoryStore } from "../../../features/story/store/useStoryStore";
@@ -9,6 +9,7 @@ import Avatar from "../../../components/ui/Avatar";
 import Icon from "../../../components/ui/Icon";
 import CommentThread from "../../../features/comment/CommentThread";
 import { formatCount } from "../../../utils/formatDate";
+import { FeedSkeleton } from "../../../components/ui/Skeleton";
 
 function readCaption(caption, location) {
   const raw = String(caption || "").trim();
@@ -77,7 +78,21 @@ export default function ExplorePage() {
   const [clips, setClips] = useState([]);
   const [followed, setFollowed] = useState([]);
   const [ready, setReady] = useState(false);
-  const [mode, setMode] = useState("following");
+  const [params, setParams] = useSearchParams();
+  const mode = params.get("tab") === "all" ? "all" : "following";
+
+  function setMode(next) {
+    const copy = new URLSearchParams(params);
+    copy.set("tab", next === "all" ? "all" : "following");
+    setParams(copy, { replace: true });
+  }
+
+  useEffect(() => {
+    if (params.get("tab") === "all" || params.get("tab") === "following") return;
+    const copy = new URLSearchParams(params);
+    copy.set("tab", "following");
+    setParams(copy, { replace: true });
+  }, [params, setParams]);
   const [active, setActive] = useState(0);
   const box = useRef(null);
   const slides = useRef([]);
@@ -247,7 +262,7 @@ export default function ExplorePage() {
         </button>
       </div>
       <div className="discover-page" ref={box} onScroll={onScroll}>
-        {!ready ? <p className="muted discover-empty">Yüklənir</p> : shown.length === 0 ? (
+        {!ready ? <FeedSkeleton /> : shown.length === 0 ? (
           <p className="muted discover-empty">
             {mode === "following" ? "İzlədiyin insanların videosu hələ yoxdur" : "Hələ video yoxdur"}
           </p>

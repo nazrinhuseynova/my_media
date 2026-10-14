@@ -34,6 +34,17 @@ public class AuthController : ControllerBase
         _config = config;
     }
 
+    [AllowAnonymous]
+    [HttpGet("providers")]
+    public IActionResult Providers()
+    {
+        return Ok(new
+        {
+            googleClientId = _config["Google:ClientId"] ?? "",
+            appleClientId = _config["Apple:ClientId"] ?? ""
+        });
+    }
+
     [HttpPost("register")]
     public async Task<IActionResult> Register(RegisterRequest request)
     {
@@ -62,27 +73,16 @@ public class AuthController : ControllerBase
         }
 
         var isEmail = contact.Contains('@');
-        if (isEmail)
+        if (!isEmail)
         {
-            contact = contact.ToLowerInvariant();
-            var emailTaken = await _users.FindByEmailAsync(contact);
-            if (emailTaken != null)
-            {
-                return BadRequest(new { message = "Bu email artıq istifadə olunur" });
-            }
+            return BadRequest(new { message = "Qeydiyyat üçün email lazımdır" });
         }
-        else
-        {
-            contact = contact.Replace(" ", "");
-            if (contact.Length < 9)
-            {
-                return BadRequest(new { message = "Düzgün telefon yazın" });
-            }
 
-            if (await _users.Users.AnyAsync(u => u.PhoneNumber == contact))
-            {
-                return BadRequest(new { message = "Bu nömrə artıq istifadə olunur" });
-            }
+        contact = contact.ToLowerInvariant();
+        var emailTaken = await _users.FindByEmailAsync(contact);
+        if (emailTaken != null)
+        {
+            return BadRequest(new { message = "Bu email artıq istifadə olunur" });
         }
 
         var user = new AppUser
@@ -105,8 +105,16 @@ public class AuthController : ControllerBase
 
         await _users.AddToRoleAsync(user, "User");
 
-        await IssueOtpAsync(user, contact, "register");
-        return Ok(new { message = "Kod göndərildi", userId = user.Id });
+        try
+        {
+            await IssueOtpAsync(user, contact, "register");
+        }
+        catch (InvalidOperationException ex)
+        {
+            await DropPendingUserAsync(user);
+            return StatusCode(503, new { message = ex.Message });
+        }
+        return Ok(new { message = "Kod emailinə göndərildi", userId = user.Id });
     }
 
     [HttpPost("login")]
@@ -124,10 +132,17 @@ public class AuthController : ControllerBase
 
         if (!user.EmailConfirmed)
         {
-            await IssueOtpAsync(user, request.Contact ?? user.Email ?? user.UserName ?? "", "register");
+            try
+            {
+                await IssueOtpAsync(user, Mailbox(user, request.Contact), "register");
+            }
+            catch (InvalidOperationException ex)
+            {
+                return StatusCode(503, new { message = ex.Message });
+            }
             return StatusCode(403, new
             {
-                message = "Əvvəlcə kodu təsdiqləyin",
+                message = "Əvvəlcə emailə gələn kodu təsdiqləyin",
                 needsOtp = true,
                 userId = user.Id
             });
@@ -221,8 +236,15 @@ public class AuthController : ControllerBase
         }
 
         var contact = (request.Contact ?? "").Trim();
-        await IssueOtpAsync(user, contact, "reset");
-        return Ok(new { message = "Kod göndərildi", userId = user.Id });
+        try
+        {
+            await IssueOtpAsync(user, Mailbox(user, contact), "reset");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StatusCode(503, new { message = ex.Message });
+        }
+        return Ok(new { message = "Kod emailinə göndərildi", userId = user.Id });
     }
 
     [HttpPost("resend-otp")]
@@ -235,9 +257,15 @@ public class AuthController : ControllerBase
         }
 
         var type = request.Type == "reset" ? "reset" : "register";
-        var contact = string.IsNullOrWhiteSpace(user.PhoneNumber) ? user.Email ?? user.UserName ?? "" : user.PhoneNumber;
-        await IssueOtpAsync(user, contact, type);
-        return Ok(new { message = "Kod yenidən göndərildi" });
+        try
+        {
+            await IssueOtpAsync(user, Mailbox(user, user.Email), type);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StatusCode(503, new { message = ex.Message });
+        }
+        return Ok(new { message = "Kod yenidən emailinə göndərildi" });
     }
 
     [HttpPost("verify-otp")]
@@ -552,6 +580,25 @@ public class AuthController : ControllerBase
         await _db.SaveChangesAsync();
         await _otp.SendAsync(contact, code);
         return code;
+    }
+
+    private static string Mailbox(AppUser user, string? contact)
+    {
+        var raw = (contact ?? "").Trim();
+        if (raw.Contains('@') && !raw.EndsWith("@pulse.local", StringComparison.OrdinalIgnoreCase))
+            return raw.ToLowerInvariant();
+        var email = user.Email ?? "";
+        if (email.Contains('@') && !email.EndsWith("@pulse.local", StringComparison.OrdinalIgnoreCase))
+            return email.ToLowerInvariant();
+        return raw;
+    }
+
+    private async Task DropPendingUserAsync(AppUser user)
+    {
+        var codes = await _db.OtpCodes.Where(x => x.UserId == user.Id).ToListAsync();
+        if (codes.Count > 0) _db.OtpCodes.RemoveRange(codes);
+        await _db.SaveChangesAsync();
+        await _users.DeleteAsync(user);
     }
 
     private string CreateResetToken(AppUser user)

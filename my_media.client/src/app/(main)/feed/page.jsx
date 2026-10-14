@@ -11,6 +11,7 @@ import PostCard from "../../../features/post/components/PostCard";
 import StoryBar from "../../../features/story/components/StoryBar";
 import { useIntersection } from "../../../hooks/useIntersection";
 import { notify } from "../../../stores/useNoticeStore";
+import { FeedSkeleton } from "../../../components/ui/Skeleton";
 
 function SuggestRail({ people, onFollow }) {
   const row = useRef(null);
@@ -169,7 +170,7 @@ export default function FeedPage() {
           }}
         />
       ) : null}
-      {status === "loading" && !items.length ? <p className="muted feed-pad">Lent yüklənir...</p> : null}
+      {status === "loading" && !items.length ? <FeedSkeleton /> : null}
       {status === "error" ? (
         <div className="feed-note feed-pad">
           <p className="error-text">{error || "Lent yüklənmədi"}</p>

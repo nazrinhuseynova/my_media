@@ -6,6 +6,7 @@ import { formatDate } from "../../../utils/formatDate";
 import Button from "../../../components/ui/Button";
 import Avatar from "../../../components/ui/Avatar";
 import { notify } from "../../../stores/useNoticeStore";
+import { ListSkeleton } from "../../../components/ui/Skeleton";
 
 const TYPE_LABEL = {
   like: "Bəyənmə",
@@ -22,9 +23,10 @@ function whoOf(n) {
 export default function NotificationsPage() {
   const { items, hasMore, page, load, markRead } = useNotificationStore();
   const [requests, setRequests] = useState([]);
+  const [booted, setBooted] = useState(false);
 
   useEffect(() => {
-    load();
+    load().finally(() => setBooted(true));
     api.get("/api/follow-requests").then((data) => setRequests(Array.isArray(data) ? data : [])).catch(() => setRequests([]));
   }, [load]);
 
@@ -86,7 +88,7 @@ export default function NotificationsPage() {
 
       <section className="notify-section">
         <h3>Gələnlər</h3>
-        {incomingEmpty ? (
+        {!booted ? <ListSkeleton /> : incomingEmpty ? (
           <p className="notify-empty">Yeni bəyənmə, şərh və ya izləmə yoxdur</p>
         ) : (
           <>

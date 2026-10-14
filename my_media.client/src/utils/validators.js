@@ -31,9 +31,9 @@ export function validateRegister(values) {
   }
   const contact = (values.contact || "").trim();
   if (!contact) {
-    errors.contact = "Email və ya telefon daxil edin";
-  } else if (!isEmail(contact) && !isPhone(contact)) {
-    errors.contact = "Düzgün email və ya telefon yazın";
+    errors.contact = "Email daxil edin";
+  } else if (!isEmail(contact)) {
+    errors.contact = "Düzgün email yazın";
   }
   const passwordError = validatePassword(values.password);
   if (passwordError) errors.password = passwordError;
