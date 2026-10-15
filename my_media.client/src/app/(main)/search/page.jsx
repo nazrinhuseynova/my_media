@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { postHref } from "../../../utils/postHref";
-import { ListSkeleton } from "../../../components/ui/Skeleton";
 import { api } from "../../../services/api";
 import { useDebounce } from "../../../hooks/useDebounce";
 import Avatar from "../../../components/ui/Avatar";
 import Icon from "../../../components/ui/Icon";
+import AutoPlayVideo from "../../../components/ui/AutoPlayVideo";
+import LoadingDots from "../../../components/ui/LoadingDots";
 
 const RECENT_KEY = "pulse_search_recent";
 const TABS = [
@@ -95,6 +96,16 @@ function readTab(value) {
   return TABS.some((item) => item.id === value) ? value : "all";
 }
 
+function MosaicSkeleton() {
+  return (
+    <div className="explore-mosaic search-mosaic" aria-hidden="true">
+      {Array.from({ length: 9 }).map((_, i) => (
+        <span key={i} className="skel skel-tile explore-tile" />
+      ))}
+    </div>
+  );
+}
+
 export default function SearchPage() {
   const [params, setParams] = useSearchParams();
   const q = params.get("q") || "";
@@ -105,7 +116,7 @@ export default function SearchPage() {
     const next = new URLSearchParams(params);
     if (value) next.set("q", value);
     else next.delete("q");
-    next.set("tab", tab);
+    if (!next.get("tab")) next.set("tab", tab);
     setParams(next, { replace: true });
   }
 
@@ -123,21 +134,40 @@ export default function SearchPage() {
     next.set("tab", "all");
     setParams(next, { replace: true });
   }, [params, setParams]);
+
   const [users, setUsers] = useState([]);
   const [hashtags, setHashtags] = useState([]);
   const [locations, setLocations] = useState([]);
   const [items, setItems] = useState([]);
   const [ready, setReady] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [postPage, setPostPage] = useState(1);
+  const [reelPage, setReelPage] = useState(1);
+  const [postMore, setPostMore] = useState(false);
+  const [reelMore, setReelMore] = useState(false);
   const [recent, setRecent] = useState(loadRecent);
   const [open, setOpen] = useState(false);
   const boxRef = useRef(null);
+  const busyRef = useRef(false);
+  const sentinelRef = useRef(null);
 
   useEffect(() => {
+    let cancel = false;
     Promise.all([
-      api.get("/api/explore", { params: { page: 1, pageSize: 12 } }).catch(() => ({ items: [] })),
-      api.get("/api/reels", { params: { page: 1, pageSize: 8 } }).catch(() => ({ items: [] })),
-    ]).then(([explore, reels]) => setItems(mixFeed(explore?.items, reels?.items || reels))).finally(() => setReady(true));
+      api.get("/api/explore", { params: { page: 1, pageSize: 12 } }).catch(() => ({ items: [], hasMore: false })),
+      api.get("/api/reels", { params: { page: 1, pageSize: 8 } }).catch(() => ({ items: [], hasMore: false })),
+    ]).then(([explore, reels]) => {
+      if (cancel) return;
+      setItems(mixFeed(explore?.items, reels?.items || reels));
+      setPostPage(1);
+      setReelPage(1);
+      setPostMore(!!explore?.hasMore);
+      setReelMore(!!(reels?.hasMore));
+    }).finally(() => {
+      if (!cancel) setReady(true);
+    });
+    return () => { cancel = true; };
   }, []);
 
   useEffect(() => {
@@ -151,7 +181,7 @@ export default function SearchPage() {
     }
     let cancel = false;
     setSearching(true);
-    api.get("/api/search", { params: { q: text } })
+    api.get("/api/search", { params: { q: text, page: 1, pageSize: 20 } })
       .then((data) => {
         if (cancel) return;
         setUsers(data?.users || []);
@@ -167,9 +197,7 @@ export default function SearchPage() {
       .finally(() => {
         if (!cancel) setSearching(false);
       });
-    return () => {
-      cancel = true;
-    };
+    return () => { cancel = true; };
   }, [debounced]);
 
   useEffect(() => {
@@ -187,6 +215,64 @@ export default function SearchPage() {
       document.removeEventListener("keydown", onKey);
     };
   }, [open]);
+
+  const loadMore = useCallback(async () => {
+    if (busyRef.current || (!postMore && !reelMore) || open) return;
+    busyRef.current = true;
+    setLoadingMore(true);
+    try {
+      const jobs = [];
+      if (postMore) {
+        jobs.push(
+          api.get("/api/explore", { params: { page: postPage + 1, pageSize: 12 } })
+            .then((data) => ({ kind: "post", data }))
+            .catch(() => ({ kind: "post", data: { items: [], hasMore: false } }))
+        );
+      }
+      if (reelMore) {
+        jobs.push(
+          api.get("/api/reels", { params: { page: reelPage + 1, pageSize: 8 } })
+            .then((data) => ({ kind: "reel", data }))
+            .catch(() => ({ kind: "reel", data: { items: [], hasMore: false } }))
+        );
+      }
+      const results = await Promise.all(jobs);
+      let nextPosts = [];
+      let nextReels = [];
+      results.forEach((entry) => {
+        if (entry.kind === "post") {
+          nextPosts = entry.data?.items || [];
+          setPostPage((p) => p + 1);
+          setPostMore(!!entry.data?.hasMore);
+        } else {
+          nextReels = entry.data?.items || entry.data || [];
+          if (!Array.isArray(nextReels)) nextReels = entry.data?.items || [];
+          setReelPage((p) => p + 1);
+          setReelMore(!!entry.data?.hasMore);
+        }
+      });
+      const mixed = mixFeed(nextPosts, nextReels);
+      if (mixed.length) {
+        setItems((prev) => {
+          const seen = new Set(prev.map((x) => `${x.kind}-${x.id}`));
+          return [...prev, ...mixed.filter((x) => !seen.has(`${x.kind}-${x.id}`))];
+        });
+      }
+    } finally {
+      busyRef.current = false;
+      setLoadingMore(false);
+    }
+  }, [open, postMore, reelMore, postPage, reelPage]);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !ready) return undefined;
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) loadMore();
+    }, { rootMargin: "240px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [loadMore, ready]);
 
   const queryOn = debounced.trim().length > 0;
   const posts = useMemo(() => {
@@ -241,8 +327,7 @@ export default function SearchPage() {
 
   return (
     <div className="page search-page">
-      {!ready ? <ListSkeleton /> : null}
-      <div className="search-anchor" ref={boxRef}>
+      <div className="search-top" ref={boxRef}>
         <label className="explore-search">
           <Icon name="search" size={18} />
           <input
@@ -267,210 +352,223 @@ export default function SearchPage() {
               <strong>Axtarış</strong>
               <button type="button" className="ig-text-btn" onClick={() => setOpen(false)}>Bağla</button>
             </div>
-        <div className="ig-tabs" role="tablist">
-          {TABS.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              aria-selected={tab === item.id}
-              className={tab === item.id ? "on" : ""}
-              onClick={() => setTab(item.id)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="ig-search-scroll">
-          {!queryOn && tab === "all" && recent.length ? (
-            <section className="ig-block">
-              <div className="ig-sec">
-                <h2>Son axtarışlar</h2>
-                <button type="button" className="ig-text-btn" onClick={() => persist([])}>Hamısını sil</button>
-              </div>
-              {recent.map((item) => (
-                <div key={item.key} className="ig-recent">
-                  <Link to={item.href} className="ig-row" onClick={() => setOpen(false)}>
-                    {item.kind === "user" ? <Avatar src={item.avatar} alt="" /> : <span className="ig-mark">{item.kind === "tag" ? "#" : item.kind === "place" ? "⌖" : "▣"}</span>}
-                    <span className="ig-row-copy">
-                      <strong>{item.title}</strong>
-                      <em>{item.subtitle}</em>
-                    </span>
-                  </Link>
-                  <button type="button" className="ig-x" aria-label="Sil" onClick={() => forget(item.key)}>×</button>
-                </div>
+            <div className="ig-tabs" role="tablist">
+              {TABS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === item.id}
+                  className={tab === item.id ? "on" : ""}
+                  onClick={() => setTab(item.id)}
+                >
+                  {item.label}
+                </button>
               ))}
-            </section>
-          ) : null}
+            </div>
 
-          {searching ? <p className="ig-note">Axtarılır...</p> : null}
-          {nothing ? <p className="ig-note">Nəticə tapılmadı. Başqa söz yoxla.</p> : null}
-
-          {show("users") ? (
-            <section className="ig-block">
-              <div className="ig-sec">
-                <h2>Hesablar</h2>
-                {tab === "all" && people.length > visiblePeople.length ? (
-                  <button type="button" className="ig-text-btn" onClick={() => setTab("users")}>Hamısına bax</button>
-                ) : null}
-              </div>
-              {visiblePeople.length ? visiblePeople.map((user) => (
-                <Link
-                  key={user.id || user.username}
-                  to={`/profile/${user.username}`}
-                  className="ig-row"
-                  onClick={() => pick({
-                    key: `user:${user.username}`,
-                    kind: "user",
-                    title: user.username,
-                    subtitle: user.fullName || "Hesab",
-                    href: `/profile/${user.username}`,
-                    avatar: user.avatar || "",
-                  })}
-                >
-                  <Avatar src={user.avatar} alt="" />
-                  <span className="ig-row-copy">
-                    <strong>{user.username}</strong>
-                    <em>{user.fullName || "Hesab"}</em>
-                  </span>
-                </Link>
-              )) : ready || queryOn ? <p className="ig-empty">Hesab tapılmadı</p> : null}
-            </section>
-          ) : null}
-
-          {show("posts") ? (
-            <section className="ig-block">
-              <div className="ig-sec">
-                <h2>Postlar</h2>
-              </div>
-              {visiblePosts.length ? (
-                <div className="ig-post-grid">
-                  {visiblePosts.map((item) => {
-                    const media = item.media?.[0];
-                    const video = media?.type === "video";
-                    const href = item.kind === "post" ? postHref(item) : `/reels?v=${item.id}`;
-                    const title = item.caption || item.poll?.question || (item.kind === "reel" ? "Video" : "Yazı");
-                    return (
-                      <Link
-                        key={`${item.kind}-${item.id}`}
-                        to={href}
-                        className="ig-post"
-                        onClick={() => pick({
-                          key: `${item.kind}:${item.id}`,
-                          kind: "post",
-                          title,
-                          subtitle: item.user?.username ? `@${item.user.username}` : "Post",
-                          href,
-                        })}
-                      >
-                        {video ? (
-                          <video src={media.url} muted playsInline />
-                        ) : media?.url ? (
-                          <img src={media.url} alt="" />
-                        ) : (
-                          <span className="ig-tile-text">{item.poll?.question || item.caption || "Yazı"}</span>
-                        )}
-                        {video ? <span className="explore-tile-badge">Video</span> : null}
+            <div className="ig-search-scroll">
+              {!queryOn && tab === "all" && recent.length ? (
+                <section className="ig-block">
+                  <div className="ig-sec">
+                    <h2>Son axtarışlar</h2>
+                    <button type="button" className="ig-text-btn" onClick={() => persist([])}>Hamısını sil</button>
+                  </div>
+                  {recent.map((item) => (
+                    <div key={item.key} className="ig-recent">
+                      <Link to={item.href} className="ig-row" onClick={() => setOpen(false)}>
+                        {item.kind === "user" ? <Avatar src={item.avatar} alt="" /> : <span className="ig-mark">{item.kind === "tag" ? "#" : item.kind === "place" ? "⌖" : "▣"}</span>}
+                        <span className="ig-row-copy">
+                          <strong>{item.title}</strong>
+                          <em>{item.subtitle}</em>
+                        </span>
                       </Link>
-                    );
-                  })}
-                </div>
-              ) : ready || queryOn ? <p className="ig-empty">Post tapılmadı</p> : null}
-            </section>
-          ) : null}
+                      <button type="button" className="ig-x" aria-label="Sil" onClick={() => forget(item.key)}>×</button>
+                    </div>
+                  ))}
+                </section>
+              ) : null}
 
-          {show("tags") ? (
-            <section className="ig-block">
-              <div className="ig-sec">
-                <h2>Teqlər</h2>
-                {tab === "all" && tags.length > visibleTags.length ? (
-                  <button type="button" className="ig-text-btn" onClick={() => setTab("tags")}>Hamısına bax</button>
-                ) : null}
-              </div>
-              {visibleTags.length ? visibleTags.map((tag) => (
-                <Link
-                  key={tag.name}
-                  to={`/hashtag/${encodeURIComponent(tag.name.toLowerCase())}`}
-                  className="ig-row"
-                  onClick={() => pick({
-                    key: `tag:${tag.name.toLowerCase()}`,
-                    kind: "tag",
-                    title: `#${tag.name}`,
-                    subtitle: tag.count ? `${tag.count} post` : "Teq",
-                    href: `/hashtag/${encodeURIComponent(tag.name.toLowerCase())}`,
-                  })}
-                >
-                  <span className="ig-mark">#</span>
-                  <span className="ig-row-copy">
-                    <strong>#{tag.name}</strong>
-                    <em>{tag.count ? `${tag.count} post` : "Teq"}</em>
-                  </span>
-                </Link>
-              )) : ready || queryOn ? <p className="ig-empty">Teq tapılmadı</p> : null}
-            </section>
-          ) : null}
+              {searching ? <div className="ig-note"><LoadingDots label="Axtarılır" /></div> : null}
+              {nothing ? <p className="ig-note">Nəticə tapılmadı. Başqa söz yoxla.</p> : null}
 
-          {show("places") ? (
-            <section className="ig-block">
-              <div className="ig-sec">
-                <h2>Yerlər</h2>
-                {tab === "all" && places.length > visiblePlaces.length ? (
-                  <button type="button" className="ig-text-btn" onClick={() => setTab("places")}>Hamısına bax</button>
-                ) : null}
-              </div>
-              {visiblePlaces.length ? visiblePlaces.map((place) => (
-                <Link
-                  key={place.name}
-                  to={`/location/${encodeURIComponent(place.name)}`}
-                  className="ig-row"
-                  onClick={() => pick({
-                    key: `place:${place.name}`,
-                    kind: "place",
-                    title: place.name,
-                    subtitle: place.count ? `${place.count} post` : "Yer",
-                    href: `/location/${encodeURIComponent(place.name)}`,
-                  })}
-                >
-                  <span className="ig-mark">⌖</span>
-                  <span className="ig-row-copy">
-                    <strong>{place.name}</strong>
-                    <em>{place.count ? `${place.count} post` : "Yer"}</em>
-                  </span>
-                </Link>
-              )) : ready || queryOn ? <p className="ig-empty">Yer tapılmadı</p> : null}
-            </section>
-          ) : null}
+              {show("users") ? (
+                <section className="ig-block">
+                  <div className="ig-sec">
+                    <h2>Hesablar</h2>
+                    {tab === "all" && people.length > visiblePeople.length ? (
+                      <button type="button" className="ig-text-btn" onClick={() => setTab("users")}>Hamısına bax</button>
+                    ) : null}
+                  </div>
+                  {visiblePeople.length ? visiblePeople.map((user) => (
+                    <Link
+                      key={user.id || user.username}
+                      to={`/profile/${user.username}`}
+                      className="ig-row"
+                      onClick={() => pick({
+                        key: `user:${user.username}`,
+                        kind: "user",
+                        title: user.username,
+                        subtitle: user.fullName || "Hesab",
+                        href: `/profile/${user.username}`,
+                        avatar: user.avatar || "",
+                      })}
+                    >
+                      <Avatar src={user.avatar} alt="" />
+                      <span className="ig-row-copy">
+                        <strong>{user.username}</strong>
+                        <em>{user.fullName || "Hesab"}</em>
+                      </span>
+                    </Link>
+                  )) : ready || queryOn ? <p className="ig-empty">Hesab tapılmadı</p> : null}
+                </section>
+              ) : null}
 
-          {!queryOn && !recent.length && ready && !people.length && !posts.length ? (
-            <p className="ig-note">İnsan, post, teq və ya yer yaz. Nəticələr burada açılacaq.</p>
-          ) : null}
-        </div>
+              {show("posts") ? (
+                <section className="ig-block">
+                  <div className="ig-sec">
+                    <h2>Postlar</h2>
+                  </div>
+                  {visiblePosts.length ? (
+                    <div className="ig-post-grid">
+                      {visiblePosts.map((item) => {
+                        const media = item.media?.[0];
+                        const video = media?.type === "video";
+                        const href = item.kind === "post" ? postHref(item) : `/reels?v=${item.id}`;
+                        const title = item.caption || item.poll?.question || (item.kind === "reel" ? "Video" : "Yazı");
+                        return (
+                          <Link
+                            key={`${item.kind}-${item.id}`}
+                            to={href}
+                            className="ig-post"
+                            onClick={() => pick({
+                              key: `${item.kind}:${item.id}`,
+                              kind: "post",
+                              title,
+                              subtitle: item.user?.username ? `@${item.user.username}` : "Post",
+                              href,
+                            })}
+                          >
+                            {video ? (
+                              <AutoPlayVideo src={media.url} />
+                            ) : media?.url ? (
+                              <img src={media.url} alt="" loading="lazy" />
+                            ) : (
+                              <span className="ig-tile-text">{item.poll?.question || item.caption || "Yazı"}</span>
+                            )}
+                            {video ? <span className="explore-tile-badge">Video</span> : null}
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  ) : ready || queryOn ? <p className="ig-empty">Post tapılmadı</p> : null}
+                </section>
+              ) : null}
+
+              {show("tags") ? (
+                <section className="ig-block">
+                  <div className="ig-sec">
+                    <h2>Teqlər</h2>
+                    {tab === "all" && tags.length > visibleTags.length ? (
+                      <button type="button" className="ig-text-btn" onClick={() => setTab("tags")}>Hamısına bax</button>
+                    ) : null}
+                  </div>
+                  {visibleTags.length ? visibleTags.map((tag) => (
+                    <Link
+                      key={tag.name}
+                      to={`/hashtag/${encodeURIComponent(tag.name.toLowerCase())}`}
+                      className="ig-row"
+                      onClick={() => pick({
+                        key: `tag:${tag.name.toLowerCase()}`,
+                        kind: "tag",
+                        title: `#${tag.name}`,
+                        subtitle: tag.count ? `${tag.count} post` : "Teq",
+                        href: `/hashtag/${encodeURIComponent(tag.name.toLowerCase())}`,
+                      })}
+                    >
+                      <span className="ig-mark">#</span>
+                      <span className="ig-row-copy">
+                        <strong>#{tag.name}</strong>
+                        <em>{tag.count ? `${tag.count} post` : "Teq"}</em>
+                      </span>
+                    </Link>
+                  )) : ready || queryOn ? <p className="ig-empty">Teq tapılmadı</p> : null}
+                </section>
+              ) : null}
+
+              {show("places") ? (
+                <section className="ig-block">
+                  <div className="ig-sec">
+                    <h2>Yerlər</h2>
+                    {tab === "all" && places.length > visiblePlaces.length ? (
+                      <button type="button" className="ig-text-btn" onClick={() => setTab("places")}>Hamısına bax</button>
+                    ) : null}
+                  </div>
+                  {visiblePlaces.length ? visiblePlaces.map((place) => (
+                    <Link
+                      key={place.name}
+                      to={`/location/${encodeURIComponent(place.name)}`}
+                      className="ig-row"
+                      onClick={() => pick({
+                        key: `place:${place.name}`,
+                        kind: "place",
+                        title: place.name,
+                        subtitle: place.count ? `${place.count} post` : "Yer",
+                        href: `/location/${encodeURIComponent(place.name)}`,
+                      })}
+                    >
+                      <span className="ig-mark">⌖</span>
+                      <span className="ig-row-copy">
+                        <strong>{place.name}</strong>
+                        <em>{place.count ? `${place.count} post` : "Yer"}</em>
+                      </span>
+                    </Link>
+                  )) : ready || queryOn ? <p className="ig-empty">Yer tapılmadı</p> : null}
+                </section>
+              ) : null}
+
+              {!queryOn && !recent.length && ready && !people.length && !posts.length ? (
+                <p className="ig-note">İnsan, post, teq və ya yer yaz. Nəticələr burada açılacaq.</p>
+              ) : null}
+            </div>
           </div>
         ) : null}
       </div>
 
-      {!ready ? <p className="muted">Yüklənir</p> : items.length === 0 ? <p className="muted">Nəticə yoxdur</p> : (
-        <div className="explore-mosaic">
-          {items.map((item) => {
-            const media = item.media?.[0];
-            const video = media?.type === "video";
-            const href = item.kind === "post" ? postHref(item) : `/reels?v=${item.id}`;
-            return (
-              <Link key={`${item.kind}-${item.id}`} to={href} className="explore-tile">
-                {video ? (
-                  <video src={media.url} muted playsInline />
-                ) : media?.url ? (
-                  <img src={media.url} alt="" />
-                ) : (
-                  <span className="explore-tile-text">{item.poll?.question || item.caption || "Yazı"}</span>
-                )}
-                {video ? <span className="explore-tile-badge">Video</span> : null}
-              </Link>
-            );
-          })}
-        </div>
-      )}
+      <div className="search-body">
+        {!ready ? (
+          <>
+            <MosaicSkeleton />
+            <LoadingDots className="search-loading" />
+          </>
+        ) : items.length === 0 ? (
+          <p className="muted search-empty">Nəticə yoxdur</p>
+        ) : (
+          <>
+            <div className="explore-mosaic search-mosaic">
+              {items.map((item) => {
+                const media = item.media?.[0];
+                const video = media?.type === "video";
+                const href = item.kind === "post" ? postHref(item) : `/reels?v=${item.id}`;
+                return (
+                  <Link key={`${item.kind}-${item.id}`} to={href} className="explore-tile">
+                    {video ? (
+                      <AutoPlayVideo src={media.url} />
+                    ) : media?.url ? (
+                      <img src={media.url} alt="" loading="lazy" />
+                    ) : (
+                      <span className="explore-tile-text">{item.poll?.question || item.caption || "Yazı"}</span>
+                    )}
+                    {video ? <span className="explore-tile-badge">Video</span> : null}
+                  </Link>
+                );
+              })}
+            </div>
+            <div ref={sentinelRef} className="search-sentinel" />
+            {loadingMore ? <LoadingDots className="search-loading" /> : null}
+          </>
+        )}
+      </div>
     </div>
   );
 }
