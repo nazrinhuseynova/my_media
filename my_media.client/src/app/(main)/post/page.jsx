@@ -62,8 +62,12 @@ export default function PostPage() {
             variant="ghost"
             type="button"
             onClick={async () => {
-              await api.post("/api/reports", { targetType: "post", targetId: post.id, reason: "Uyğunsuz kontent" });
-              notify("Şikayət göndərildi");
+              try {
+                await api.post("/api/reports", { targetType: "post", targetId: post.id, reason: "Uyğunsuz kontent" });
+                notify("Şikayət göndərildi");
+              } catch (err) {
+                notify(err?.response?.data?.message || "Şikayət göndərilmədi", true);
+              }
             }}
           >
             Şikayət et

@@ -10,6 +10,7 @@ import { notify } from "../../../stores/useNoticeStore";
 import { useAuthStore } from "../../auth/store/useAuthStore";
 import FilterPicker from "./FilterPicker";
 import ImageEditor from "./ImageEditor";
+import { ExpressionButton } from "../../expression/ExpressionPicker";
 
 export default function CreatePostModal() {
   const open = useAppStore((s) => s.createOpen);
@@ -182,7 +183,20 @@ export default function CreatePostModal() {
             <label>Parlaqlıq {brightness}<input type="range" min="60" max="140" value={brightness} onChange={(e) => setBrightness(Number(e.target.value))} /></label>
             <label>Kontrast {contrast}<input type="range" min="60" max="140" value={contrast} onChange={(e) => setContrast(Number(e.target.value))} /></label>
           </div>
-          <Input label="Caption (#hashtag və @mention)" value={caption} onChange={(e) => setCaption(e.target.value)} />
+          <div className="create-caption-row">
+            <ExpressionButton
+              onPick={(payload) => {
+                if (payload.kind === "emoji" || payload.kind === "sticker") {
+                  setCaption((prev) => `${prev}${payload.text}`);
+                } else if (payload.kind === "music") {
+                  setCaption((prev) => `${prev}${prev && !prev.endsWith(" ") ? " " : ""}♫ ${payload.text}`);
+                } else if (payload.kind === "location") {
+                  setLocation(payload.text);
+                }
+              }}
+            />
+            <Input label="Caption (#hashtag və @mention)" value={caption} onChange={(e) => setCaption(e.target.value)} />
+          </div>
           <Input label="Lokasiya" value={location} onChange={(e) => setLocation(e.target.value)} />
           <Input label="Tag (username, vergüllə)" value={mentions} onChange={(e) => setMentions(e.target.value)} />
           <label className="field">

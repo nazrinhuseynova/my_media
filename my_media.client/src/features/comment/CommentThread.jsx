@@ -2,18 +2,20 @@ import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import Avatar from "../../components/ui/Avatar";
 import { useAuthStore } from "../auth/store/useAuthStore";
-import { COMMENT_EMOJIS } from "./emojis";
 import { notify } from "../../stores/useNoticeStore";
+import { api } from "../../services/api";
+import ExpressionPicker, { insertAtCursor } from "../expression/ExpressionPicker";
 
+/** StoryViewer və digər yerlər üçün — tam expression picker */
 export function EmojiPad({ onPick }) {
   return (
-    <div className="emoji-pad" onPointerDown={(e) => e.stopPropagation()}>
-      {COMMENT_EMOJIS.map((emoji) => (
-        <button key={emoji} type="button" onClick={() => onPick(emoji)} aria-label={emoji}>
-          {emoji}
-        </button>
-      ))}
-    </div>
+    <ExpressionPicker
+      tabs={["emoji", "sticker", "music", "location"]}
+      onPick={(payload) => {
+        if (payload.kind === "emoji" || payload.kind === "sticker") onPick?.(payload.text);
+        else onPick?.((payload.kind === "music" ? `♫ ${payload.text}` : `⌖ ${payload.text}`));
+      }}
+    />
   );
 }
 
@@ -62,16 +64,16 @@ export default function CommentThread({ comments, onChange, submit, react, edit,
   const list = orderComments(comments);
 
   function insertEmoji(emoji) {
-    const el = inputRef.current;
-    const start = el?.selectionStart ?? text.length;
-    const end = el?.selectionEnd ?? text.length;
-    const next = `${text.slice(0, start)}${emoji}${text.slice(end)}`;
-    setText(next);
-    const pos = start + emoji.length;
-    requestAnimationFrame(() => {
-      el?.focus();
-      el?.setSelectionRange(pos, pos);
-    });
+    insertAtCursor(inputRef, emoji, text, setText);
+  }
+
+  function applyExpression(payload) {
+    if (payload.kind === "emoji" || payload.kind === "sticker") {
+      insertEmoji(payload.text);
+      return;
+    }
+    const stamp = payload.kind === "music" ? `♫ ${payload.text}` : `⌖ ${payload.text}`;
+    insertAtCursor(inputRef, (text && !text.endsWith(" ") ? " " : "") + stamp, text, setText);
   }
 
   async function send(e) {
@@ -101,6 +103,15 @@ export default function CommentThread({ comments, onChange, submit, react, edit,
     onChange?.((Array.isArray(comments) ? comments : []).map((row) => (row.id === comment.id ? next : row)));
     setEditingId("");
     notify("Şərh yadda saxlandı");
+  }
+
+  async function reportComment(comment) {
+    try {
+      await api.post("/api/reports", { targetType: "comment", targetId: comment.id, reason: "Uyğunsuz şərh" });
+      notify("Şikayət göndərildi");
+    } catch (err) {
+      notify(err?.response?.data?.message || "Şikayət göndərilmədi", true);
+    }
   }
 
   async function drop(comment) {
@@ -143,6 +154,9 @@ export default function CommentThread({ comments, onChange, submit, react, edit,
                 {me?.id === c.userId && remove ? (
                   <button type="button" onClick={() => drop(c)}>Sil</button>
                 ) : null}
+                {me?.id && me.id !== c.userId ? (
+                  <button type="button" onClick={() => reportComment(c)}>Şikayət</button>
+                ) : null}
               </div>
               {react ? (
                 <div className="comment-reacts">
@@ -183,9 +197,9 @@ export default function CommentThread({ comments, onChange, submit, react, edit,
             <button type="button" onClick={() => setParent(null)}>Ləğv et</button>
           </p>
         ) : null}
-        {emojiOpen ? <EmojiPad onPick={insertEmoji} /> : null}
+        {emojiOpen ? <ExpressionPicker tabs={["emoji", "sticker", "music", "location"]} onPick={applyExpression} /> : null}
         <div className="comment-compose-row">
-          <button type="button" className="emoji-toggle" onClick={() => setEmojiOpen((open) => !open)} aria-label="Emoji">😊</button>
+          <button type="button" className="emoji-toggle" onClick={() => setEmojiOpen((open) => !open)} aria-label="Emoji və digər">😊</button>
           <input
             ref={inputRef}
             value={text}

@@ -5,6 +5,7 @@ import { formatCount, formatDate, isFuture, asUtc } from "../../../utils/formatD
 import { postApi } from "../services/postApi";
 import { useAppStore } from "../../../stores/useAppStore";
 import { useAuthStore } from "../../auth/store/useAuthStore";
+import { useUiPrefs } from "../../../stores/useUiPrefs";
 import Icon from "../../../components/ui/Icon";
 import Modal from "../../../components/ui/Modal";
 import CommentPanel from "./CommentPanel";
@@ -41,6 +42,7 @@ function Caption({ text, username }) {
 
 export default function PostCard({ post, onChange, layout = "feed" }) {
   const me = useAuthStore((s) => s.user);
+  const hideLikeCounts = useUiPrefs((s) => s.hideLikeCounts);
   const setShareTarget = useAppStore((s) => s.setShareTarget);
   const [index, setIndex] = useState(0);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -175,14 +177,16 @@ export default function PostCard({ post, onChange, layout = "feed" }) {
             ))}
           </div>
         ) : null}
-        <button type="button" className="react-summary" onClick={() => setPeopleOpen(true)}>
-          <span className="react-faces">
-            {groups.map((group) => (
-              <span key={group.type}>{reactionMeta(group.type).emoji}</span>
-            ))}
-          </span>
-          <span>{formatCount(shown.reactionCount || shown.likeCount || 0)} reaksiya</span>
-        </button>
+        {!hideLikeCounts ? (
+          <button type="button" className="react-summary" onClick={() => setPeopleOpen(true)}>
+            <span className="react-faces">
+              {groups.map((group) => (
+                <span key={group.type}>{reactionMeta(group.type).emoji}</span>
+              ))}
+            </span>
+            <span>{formatCount(shown.reactionCount || shown.likeCount || 0)} reaksiya</span>
+          </button>
+        ) : null}
       </div>
       <div className="post-actions">
         <div className="react-wrap">

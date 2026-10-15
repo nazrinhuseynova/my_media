@@ -113,7 +113,14 @@ export default function ProfilePage() {
                     <Button variant="ghost" onClick={async () => { const res = await api.post(`/api/close-friends/${user.id}`); setData({ ...data, closeFriend: res.closeFriend }); notify(res.closeFriend ? "Yaxın çevrəyə əlavə olundu" : "Yaxın çevrədən çıxarıldı"); }}>{data.closeFriend ? "Çevrədən çıxar" : "Yaxın çevrə"}</Button>
                     <Button
                       variant="ghost"
-                      onClick={async () => { await api.post("/api/reports", { targetType: "user", targetId: user.id, reason: "Uyğunsuz hesab" }); notify("Şikayət göndərildi"); }}
+                      onClick={async () => {
+                        try {
+                          await api.post("/api/reports", { targetType: "user", targetId: user.id, reason: "Uyğunsuz hesab" });
+                          notify("Şikayət göndərildi");
+                        } catch (err) {
+                          notify(err?.response?.data?.message || "Şikayət göndərilmədi", true);
+                        }
+                      }}
                     >
                       Şikayət et
                     </Button>

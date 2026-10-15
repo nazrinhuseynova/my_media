@@ -9,6 +9,7 @@ import { useAppStore } from "../../../stores/useAppStore";
 import { usePostStore } from "../../../features/post/store/usePostStore";
 import PostCard from "../../../features/post/components/PostCard";
 import StoryBar from "../../../features/story/components/StoryBar";
+import LiveRail from "../../../features/live/LiveRail";
 import { useIntersection } from "../../../hooks/useIntersection";
 import { notify } from "../../../stores/useNoticeStore";
 import { FeedSkeleton } from "../../../components/ui/Skeleton";
@@ -42,7 +43,7 @@ function SuggestRail({ people, onFollow }) {
   }
 
   return (
-    <section className="suggest-block">
+    <section className="suggest-block" data-tour="suggestions">
       <div className="feed-pad">
         <h2 className="feed-kicker">Təkliflər</h2>
         <h3>Tanış ola bilərsən</h3>
@@ -148,7 +149,7 @@ export default function FeedPage() {
         <h1>Ana səhifə</h1>
         <p className="muted">İzlədiyin insanların paylaşımları burada görünür.</p>
       </header>
-      <button type="button" className="composer" onClick={() => setCreateOpen(true)}>
+      <button type="button" className="composer" data-tour="composer" onClick={() => setCreateOpen(true)}>
         <Avatar src={me?.avatar} alt={me?.username || ""} />
         <span>Nə paylaşmaq istəyirsən?</span>
       </button>
@@ -156,6 +157,7 @@ export default function FeedPage() {
         <h2 className="feed-kicker">Hekayələr</h2>
       </section>
       <StoryBar />
+      <LiveRail />
       {people.length ? (
         <SuggestRail
           people={people}

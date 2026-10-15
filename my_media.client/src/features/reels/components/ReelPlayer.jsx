@@ -5,6 +5,7 @@ import { useAppStore } from "../../../stores/useAppStore";
 import { formatCount } from "../../../utils/formatDate";
 import { resolveMusic, mediaSrc } from "../../../utils/upload";
 import Icon from "../../../components/ui/Icon";
+import { notify } from "../../../stores/useNoticeStore";
 
 export default function ReelPlayer({ reel, active }) {
   const videoRef = useRef(null);
@@ -96,6 +97,20 @@ export default function ReelPlayer({ reel, active }) {
           onClick={() => setShareTarget({ ...item, videoUrl: item.videoUrl, media: [{ type: "video", url: item.videoUrl }], caption: item.caption })}
         >
           <Icon name="share" size={24} />
+        </button>
+        <button
+          type="button"
+          aria-label="Şikayət"
+          onClick={async () => {
+            try {
+              await api.post("/api/reports", { targetType: "reel", targetId: item.id, reason: "Uyğunsuz reel" });
+              notify("Şikayət göndərildi");
+            } catch (err) {
+              notify(err?.response?.data?.message || "Şikayət göndərilmədi", true);
+            }
+          }}
+        >
+          <Icon name="more" size={24} />
         </button>
       </div>
     </div>
