@@ -7,8 +7,55 @@ namespace Pulse.API.Helpers;
 
 public static class DtoMapper
 {
-    public static object MapUser(AppUser u, string role = "user")
+    public static (string? text, string kind) LiveNote(AppUser u)
     {
+        if (string.IsNullOrWhiteSpace(u.NoteText) || u.NoteAt == null) return (null, "text");
+        if (DateTime.UtcNow - u.NoteAt.Value > TimeSpan.FromHours(24)) return (null, "text");
+        return (u.NoteText.Trim(), string.IsNullOrWhiteSpace(u.NoteKind) ? "text" : u.NoteKind);
+    }
+
+    public static object MapUser(AppUser u, string role = "user", bool? isOnline = null, DateTime? lastSeenAt = null, bool includePrivacy = false)
+    {
+        var online = isOnline ?? u.IsOnline;
+        var seen = lastSeenAt ?? u.LastSeenAt;
+        var (noteText, noteKind) = LiveNote(u);
+        if (includePrivacy)
+        {
+            return new
+            {
+                id = u.Id.ToString(),
+                email = u.Email,
+                phone = u.PhoneNumber,
+                username = u.UserName,
+                fullName = u.FullName,
+                bio = u.Bio ?? "",
+                website = u.Website ?? "",
+                language = u.Language ?? "",
+                avatar = u.AvatarUrl,
+                avatarExtension = u.AvatarExtension,
+                isPrivate = u.IsPrivate,
+                profileViewHistory = u.ProfileViewHistory,
+                showActivityStatus = u.ShowActivityStatus ?? "everyone",
+                whoCanMessage = u.WhoCanMessage ?? "everyone",
+                whoCanTag = u.WhoCanTag ?? "everyone",
+                whoCanMention = u.WhoCanMention ?? "everyone",
+                readReceipts = u.ReadReceipts,
+                allowStoryReplies = u.AllowStoryReplies,
+                allowStorySharing = u.AllowStorySharing,
+                isActive = u.IsActive,
+                isBanned = u.IsBanned,
+                bannedUntil = u.BannedUntil,
+                role,
+                provider = u.Provider,
+                isOnline = online,
+                lastSeenAt = seen,
+                noteText,
+                noteKind,
+                noteAt = noteText == null ? null : u.NoteAt,
+                createdAt = u.CreatedAt
+            };
+        }
+
         return new
         {
             id = u.Id.ToString(),
@@ -18,16 +65,21 @@ public static class DtoMapper
             fullName = u.FullName,
             bio = u.Bio ?? "",
             website = u.Website ?? "",
+            language = u.Language ?? "",
             avatar = u.AvatarUrl,
             avatarExtension = u.AvatarExtension,
             isPrivate = u.IsPrivate,
             profileViewHistory = u.ProfileViewHistory,
             isActive = u.IsActive,
             isBanned = u.IsBanned,
+            bannedUntil = u.BannedUntil,
             role,
             provider = u.Provider,
-            isOnline = u.IsOnline,
-            lastSeenAt = u.LastSeenAt,
+            isOnline = online,
+            lastSeenAt = seen,
+            noteText,
+            noteKind,
+            noteAt = noteText == null ? null : u.NoteAt,
             createdAt = u.CreatedAt
         };
     }
@@ -166,7 +218,7 @@ public static class DtoMapper
             ?? user.FindFirstValue("nameid");
         if (!Guid.TryParse(raw, out var id))
         {
-            throw new UnauthorizedAccessException("Token istifadeci id-si yanlisdir");
+            throw new UnauthorizedAccessException("Sessiya bitib");
         }
 
         return id;
