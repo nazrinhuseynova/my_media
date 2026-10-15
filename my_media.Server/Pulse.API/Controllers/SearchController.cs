@@ -22,17 +22,29 @@ public class SearchController : ControllerBase
     }
 
     [HttpGet("/api/search")]
-    public async Task<IActionResult> Search([FromQuery] string q = "", [FromQuery] string type = "all")
+    public async Task<IActionResult> Search(
+        [FromQuery] string q = "",
+        [FromQuery] string type = "all",
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20)
     {
         q = (q ?? "").Trim().ToLower();
         if (q.Length == 0)
-            return Ok(new { users = Array.Empty<object>(), hashtags = Array.Empty<string>(), locations = Array.Empty<string>() });
+            return Ok(new { users = Array.Empty<object>(), hashtags = Array.Empty<string>(), locations = Array.Empty<string>(), page = 1, pageSize, hasMore = false });
+        var paging = Paging.Normalize(page, pageSize, 20, 40);
         var me = DtoMapper.GetUserId(User);
         var hidden = await _db.Blocks.Where(b => b.BlockerId == me).Select(b => b.BlockedId).ToListAsync();
         hidden.AddRange(await _db.Blocks.Where(b => b.BlockedId == me).Select(b => b.BlockerId).ToListAsync());
-        var users = await _users.Users
-            .Where(u => u.IsActive && !u.IsBanned && !hidden.Contains(u.Id) && (u.UserName!.ToLower().Contains(q) || u.FullName.ToLower().Contains(q)))
-            .Take(20).ToListAsync();
+        var adminIds = (await _users.GetUsersInRoleAsync("Admin")).Select(a => a.Id).ToList();
+        var userQuery = _users.Users
+            .Where(u => u.IsActive && !u.IsBanned && !hidden.Contains(u.Id) && !adminIds.Contains(u.Id) && (u.UserName!.ToLower().Contains(q) || u.FullName.ToLower().Contains(q)));
+        var userTotal = await userQuery.CountAsync();
+        var users = await userQuery
+            .OrderBy(u => u.UserName)
+            .Skip((paging.Page - 1) * paging.PageSize)
+            .Take(paging.PageSize)
+            .ToListAsync();
+        var usersHasMore = paging.Page * paging.PageSize < userTotal;
 
         var now = DateTime.UtcNow;
         var hashtags = (await _db.Posts.AsNoTracking()
@@ -61,10 +73,19 @@ public class SearchController : ControllerBase
             .Take(20)
             .ToListAsync();
 
-        if (type == "user") return Ok(new { users = users.Select(u => DtoMapper.MapUser(u)) });
-        if (type == "hashtag") return Ok(new { hashtags });
-        if (type == "location") return Ok(new { locations });
-        return Ok(new { users = users.Select(u => DtoMapper.MapUser(u)), hashtags, locations });
+        if (type == "user")
+            return Ok(new { users = users.Select(u => DtoMapper.MapUser(u)), page = paging.Page, pageSize = paging.PageSize, hasMore = usersHasMore });
+        if (type == "hashtag") return Ok(new { hashtags, page = paging.Page, pageSize = paging.PageSize, hasMore = false });
+        if (type == "location") return Ok(new { locations, page = paging.Page, pageSize = paging.PageSize, hasMore = false });
+        return Ok(new
+        {
+            users = users.Select(u => DtoMapper.MapUser(u)),
+            hashtags,
+            locations,
+            page = paging.Page,
+            pageSize = paging.PageSize,
+            hasMore = usersHasMore
+        });
     }
 
     [AllowAnonymous]

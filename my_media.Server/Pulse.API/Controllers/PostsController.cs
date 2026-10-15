@@ -982,16 +982,25 @@ public class PostsController : ControllerBase
         var reason = (body.Reason ?? "").Trim();
         if (reason.Length == 0 || !Guid.TryParse(body.TargetId, out var targetId))
             return BadRequest(new { message = "Sikayet melumati natamamdir" });
+        if (type == "user" && targetId == me)
+            return BadRequest(new { message = "Öz hesabına şikayət olunmur" });
+        if (type == "user" && await IsDeskAdmin(targetId))
+            return BadRequest(new { message = "Admin hesabına şikayət olunmur" });
+        var storyFrom = DateTime.UtcNow.AddHours(-24);
         var exists = type switch
         {
             "post" => await _db.Posts.AnyAsync(p => p.Id == targetId && !p.IsDeleted),
             "reel" => await _db.Reels.AnyAsync(r => r.Id == targetId && !r.IsDeleted),
             "user" => await _db.Users.AnyAsync(u => u.Id == targetId && u.IsActive && !u.IsBanned),
-            "comment" => await _db.Comments.AnyAsync(c => c.Id == targetId),
+            "comment" => await _db.Comments.AnyAsync(c => c.Id == targetId) || await _db.ReelComments.AnyAsync(c => c.Id == targetId),
+            "story" => await _db.Stories.AnyAsync(s => s.Id == targetId && s.CreatedAt >= storyFrom),
             _ => false
         };
         if (!exists) return BadRequest(new { message = "Sikayet olunan tapilmadi" });
-        _db.Reports.Add(new Report { FromId = me, TargetType = type, TargetId = targetId.ToString(), Reason = reason });
+        var key = targetId.ToString();
+        if (await _db.Reports.AnyAsync(r => r.FromId == me && r.Status == "open" && r.TargetType == type && r.TargetId == key))
+            return BadRequest(new { message = "Bu şikayət artıq növbədədir" });
+        _db.Reports.Add(new Report { FromId = me, TargetType = type, TargetId = key, Reason = reason });
         await _db.SaveChangesAsync();
         return Ok(new { message = "Sikayet gonderildi" });
     }
@@ -1045,6 +1054,16 @@ public class PostsController : ControllerBase
             .Select(w => new string(w.TrimStart('#').Where(ch => char.IsLetterOrDigit(ch) || ch == '_').ToArray()).ToLower())
             .Where(w => w.Length > 0)
             .Distinct());
+    }
+
+    private Task<bool> IsDeskAdmin(Guid userId)
+    {
+        return (
+            from userRole in _db.UserRoles
+            join role in _db.Roles on userRole.RoleId equals role.Id
+            where userRole.UserId == userId && role.Name == "Admin"
+            select userRole
+        ).AnyAsync();
     }
 }
 
