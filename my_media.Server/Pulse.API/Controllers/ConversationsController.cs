@@ -60,10 +60,17 @@ public class ConversationsController : ControllerBase
                 .ToListAsync())
                 .ToDictionary(m => m.ConversationId);
 
-        return Ok(convs.Select(c =>
+        var result = new List<object>();
+        foreach (var c in convs)
         {
             lastByConv.TryGetValue(c.Id, out var last);
-            return new
+            var members = new List<object>();
+            foreach (var m in c.Members.Where(x => x.UserId != me && x.User != null))
+            {
+                var (online, seen) = await PrivacyRules.PresenceForViewerAsync(_db, m.User, me, m.User.IsOnline);
+                members.Add(DtoMapper.MapUser(m.User, isOnline: online, lastSeenAt: seen));
+            }
+            result.Add(new
             {
                 id = c.Id.ToString(),
                 isGroup = c.IsGroup,
@@ -71,10 +78,11 @@ public class ConversationsController : ControllerBase
                 memberIds = c.Members.Select(m => m.UserId.ToString()),
                 updatedAt = c.UpdatedAtValue,
                 last = last == null ? null : new { text = last.IsDeleted ? "Mesaj silindi" : last.Text, createdAt = last.CreatedAt, readBy = (last.ReadBy ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries) },
-                members = c.Members.Where(m => m.UserId != me).Select(m => DtoMapper.MapUser(m.User)),
+                members,
                 unread = last != null && !(last.ReadBy ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries).Contains(me.ToString())
-            };
-        }));
+            });
+        }
+        return Ok(result);
     }
 
     [HttpPost]
@@ -103,6 +111,13 @@ public class ConversationsController : ControllerBase
             .ToListAsync();
         if (found.Count != others.Count)
             return BadRequest(new { message = "Istifadeci tapilmadi" });
+
+        var targets = await _db.Users.AsNoTracking().Where(u => others.Contains(u.Id)).ToListAsync();
+        foreach (var target in targets)
+        {
+            if (!await PrivacyRules.AllowsAsync(_db, target, me, target.WhoCanMessage))
+                return StatusCode(403, new { message = $"@{target.UserName} mesaj qəbul etmir" });
+        }
 
         var ids = rawIds;
         var isGroup = ids.Count > 2 || body.IsGroup;
@@ -182,13 +197,19 @@ public class ConversationsController : ControllerBase
         if (await _db.Blocks.AnyAsync(b =>
                 (b.BlockerId == me && others.Contains(b.BlockedId)) || (b.BlockedId == me && others.Contains(b.BlockerId))))
             return StatusCode(403, new { message = "Bu profil baglidir" });
-        var type = body.Type ?? "text";
+        var type = (body.Type ?? "text").Trim().ToLowerInvariant();
+        var allowed = new HashSet<string> { "text", "image", "video", "audio", "post", "reel", "location", "music", "status" };
+        if (!allowed.Contains(type)) type = "text";
         var text = (body.Text ?? "").Trim();
         var folder = type == "video" ? "videos" : type == "audio" ? "audio" : "images";
-        var (mediaUrl, mediaExtension) = await StoredMedia.ResolveAsync(_files, body.MediaUrl, body.MediaExtension, folder);
+        var (mediaUrl, mediaExtension) = type is "location" or "music" or "status"
+            ? ("", "")
+            : await StoredMedia.ResolveAsync(_files, body.MediaUrl, body.MediaExtension, folder);
         var shared = await SharedPost(me, body.SharedPostId);
         if (text.Length == 0 && string.IsNullOrWhiteSpace(mediaUrl) && shared == null)
             return BadRequest(new { message = "Mesaj yaz" });
+        if (type is "location" or "music" or "status" && text.Length == 0)
+            return BadRequest(new { message = "Məlumat yaz" });
         var msg = new Message
         {
             ConversationId = id,
