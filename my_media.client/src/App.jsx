@@ -1,6 +1,8 @@
-﻿import { useEffect } from "react";
+﻿import { useEffect, useState } from "react";
 import { Route, Routes } from "react-router-dom";
 import "./styles/ui.css";
+import IntroSplash from "./features/intro/IntroSplash";
+import WelcomePage from "./features/intro/WelcomePage";
 import { useAuthStore } from "./features/auth/store/useAuthStore";
 import { useNotificationStore } from "./stores/useNotificationStore";
 import { connectSocket, onSocket } from "./lib/socket";
@@ -27,10 +29,31 @@ import HashtagPage from "./app/(main)/hashtag/page";
 import LocationPage from "./app/(main)/location/page";
 import ShelfPage from "./app/(main)/shelf/page";
 
+const SKIP_INTRO_KEY = "pulse_skip_intro";
+
+/** Yalnız giriş/qeydiyyat/hesab dəyişimi sonrası reload-da intro-nu keç. Yeniləmədə göstər. */
+function shouldShowIntro() {
+    try {
+        if (sessionStorage.getItem(SKIP_INTRO_KEY) === "1") {
+            sessionStorage.removeItem(SKIP_INTRO_KEY);
+            return false;
+        }
+    } catch {
+        /* ignore */
+    }
+    return true;
+}
+
 export default function App() {
+    const [intro, setIntro] = useState(shouldShowIntro);
     const bootstrap = useAuthStore((s) => s.bootstrap);
     const user = useAuthStore((s) => s.user);
     const loadNotes = useNotificationStore((s) => s.load);
+
+    // Giriş/qeydiyyatdan sonra (client navigate) intro-nu bağla
+    useEffect(() => {
+        if (user && intro) setIntro(false);
+    }, [user, intro]);
 
     useEffect(() => {
         bootstrap();
@@ -49,7 +72,10 @@ export default function App() {
     }, [user, loadNotes]);
 
     return (
+        <>
+        {intro ? <IntroSplash onDone={() => setIntro(false)} /> : null}
         <Routes>
+            <Route path="/welcome" element={<WelcomePage />} />
             <Route element={<AuthLayout />}>
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/register" element={<RegisterPage />} />
@@ -77,5 +103,6 @@ export default function App() {
                 <Route path="/location/:name" element={<LocationPage />} />
             </Route>
         </Routes>
+        </>
     );
 }
