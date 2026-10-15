@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
@@ -10,12 +9,13 @@ namespace Pulse.Infrastructure.Realtime;
 [Authorize]
 public class ChatHub : Hub
 {
-    private static readonly ConcurrentDictionary<Guid, int> Connections = new();
     private readonly AppDbContext _db;
+    private readonly PresenceTracker _presence;
 
-    public ChatHub(AppDbContext db)
+    public ChatHub(AppDbContext db, PresenceTracker presence)
     {
         _db = db;
+        _presence = presence;
     }
 
     private Guid GetUserId()
@@ -29,12 +29,17 @@ public class ChatHub : Hub
     public override async Task OnConnectedAsync()
     {
         var id = GetUserId();
-        Connections.AddOrUpdate(id, 1, (_, count) => count + 1);
+        _presence.Connected(id, Context.ConnectionId);
         var user = await _db.Users.FindAsync(id);
-        if (user != null)
+        if (user != null && !user.IsOnline)
         {
             user.IsOnline = true;
             await _db.SaveChangesAsync();
+        }
+
+        if (user?.ShowActivityStatus != "nobody")
+        {
+            await Clients.Others.SendAsync("presence", new { userId = id.ToString(), online = true });
         }
 
         await base.OnConnectedAsync();
@@ -43,8 +48,8 @@ public class ChatHub : Hub
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
         var id = GetUserId();
-        var left = Connections.AddOrUpdate(id, 0, (_, count) => Math.Max(0, count - 1));
-        if (left == 0)
+        var wentOffline = _presence.Disconnected(id, Context.ConnectionId);
+        if (wentOffline)
         {
             var user = await _db.Users.FindAsync(id);
             if (user != null)
@@ -52,10 +57,29 @@ public class ChatHub : Hub
                 user.IsOnline = false;
                 user.LastSeenAt = DateTime.UtcNow;
                 await _db.SaveChangesAsync();
+                if (user.ShowActivityStatus != "nobody")
+                    await Clients.Others.SendAsync("presence", new { userId = id.ToString(), online = false, lastSeenAt = user.LastSeenAt });
             }
         }
 
         await base.OnDisconnectedAsync(exception);
+    }
+
+    public async Task Heartbeat()
+    {
+        var id = GetUserId();
+        _presence.Heartbeat(id);
+        if (!_presence.IsOnline(id))
+        {
+            _presence.Connected(id, Context.ConnectionId);
+            var user = await _db.Users.FindAsync(id);
+            if (user != null)
+            {
+                user.IsOnline = true;
+                await _db.SaveChangesAsync();
+            }
+        }
+        await Task.CompletedTask;
     }
 
     public async Task JoinConversation(string conversationId)
