@@ -147,27 +147,156 @@ public class StoriesController : ControllerBase
         return Ok(items.Select(r => new { id = r.Id.ToString(), text = r.Text, user = DtoMapper.MapUser(r.From), createdAt = r.CreatedAt }));
     }
 
+    [HttpGet("/api/stories/archive")]
+    public async Task<IActionResult> StoryArchive()
+    {
+        var me = DtoMapper.GetUserId(User);
+        var stories = await _db.Stories
+            .Where(s => s.UserId == me)
+            .OrderByDescending(s => s.CreatedAt)
+            .ToListAsync();
+        return Ok(stories.Select(s => new
+        {
+            id = s.Id.ToString(),
+            mediaUrl = s.MediaUrl,
+            mediaType = s.MediaType,
+            text = s.Text ?? "",
+            createdAt = DateTime.SpecifyKind(s.CreatedAt, DateTimeKind.Utc)
+        }));
+    }
+
     [HttpPost("/api/highlights")]
     public async Task<IActionResult> SaveHighlight([FromBody] HighlightBody body)
     {
         var me = DtoMapper.GetUserId(User);
         var name = (body.Name ?? "").Trim();
-        if (name.Length == 0 || string.IsNullOrWhiteSpace(body.MediaUrl))
-            return BadRequest(new { message = "Ad ve sekil lazimdir" });
-        var highlight = await _db.Highlights.Include(h => h.Items).FirstOrDefaultAsync(h => h.UserId == me && h.Name == name);
+        var pieces = NormalizeItems(body);
+        if (name.Length == 0 || pieces.Count == 0)
+            return BadRequest(new { message = "Ad ve hekaye lazimdir" });
+
+        var coverUrl = string.IsNullOrWhiteSpace(body.CoverUrl) ? pieces[^1].MediaUrl : body.CoverUrl.Trim();
+        Highlight? highlight = null;
+        if (!string.IsNullOrWhiteSpace(body.HighlightId) && Guid.TryParse(body.HighlightId, out var hid))
+            highlight = await _db.Highlights.Include(h => h.Items).FirstOrDefaultAsync(h => h.Id == hid && h.UserId == me);
+        highlight ??= await _db.Highlights.Include(h => h.Items).FirstOrDefaultAsync(h => h.UserId == me && h.Name == name);
+
         if (highlight == null)
         {
-            highlight = new Highlight { UserId = me, Name = name, CoverUrl = body.MediaUrl };
+            highlight = new Highlight { UserId = me, Name = name, CoverUrl = coverUrl };
             _db.Highlights.Add(highlight);
             await _db.SaveChangesAsync();
         }
-        if (highlight.Items.Any(i => i.MediaUrl == body.MediaUrl))
-            return Ok(new { id = highlight.Id.ToString(), highlight.Name });
-        var piece = new HighlightItem { HighlightId = highlight.Id, MediaUrl = body.MediaUrl, MediaType = body.MediaType ?? "image", Text = body.Text ?? "" };
-        _db.HighlightItems.Add(piece);
-        _db.Entry(piece).State = EntityState.Added;
+        else if (!string.IsNullOrWhiteSpace(body.CoverUrl))
+        {
+            highlight.CoverUrl = coverUrl;
+            highlight.UpdatedAt = DateTime.UtcNow;
+        }
+
+        var added = 0;
+        foreach (var piece in pieces)
+        {
+            if (highlight.Items.Any(i => i.MediaUrl == piece.MediaUrl)) continue;
+            var item = new HighlightItem
+            {
+                HighlightId = highlight.Id,
+                MediaUrl = piece.MediaUrl,
+                MediaType = piece.MediaType,
+                Text = piece.Text
+            };
+            _db.HighlightItems.Add(item);
+            _db.Entry(item).State = EntityState.Added;
+            highlight.Items.Add(item);
+            added++;
+        }
+
+        if (string.IsNullOrWhiteSpace(highlight.CoverUrl))
+            highlight.CoverUrl = highlight.Items.OrderBy(i => i.CreatedAt).LastOrDefault()?.MediaUrl ?? coverUrl;
+
         await _db.SaveChangesAsync();
-        return StatusCode(201, new { id = highlight.Id.ToString(), highlight.Name });
+        return StatusCode(added > 0 ? 201 : 200, MapHighlight(highlight));
+    }
+
+    [HttpPatch("/api/highlights/{id:guid}")]
+    public async Task<IActionResult> UpdateHighlight(Guid id, [FromBody] HighlightUpdateBody body)
+    {
+        var me = DtoMapper.GetUserId(User);
+        var highlight = await _db.Highlights.Include(h => h.Items).FirstOrDefaultAsync(h => h.Id == id && h.UserId == me);
+        if (highlight == null) return NotFound();
+
+        var name = (body.Name ?? "").Trim();
+        if (name.Length > 0) highlight.Name = name;
+        if (body.CoverUrl != null)
+        {
+            var cover = body.CoverUrl.Trim();
+            highlight.CoverUrl = cover.Length > 0
+                ? cover
+                : highlight.Items.OrderBy(i => i.CreatedAt).LastOrDefault()?.MediaUrl ?? "";
+        }
+        highlight.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return Ok(MapHighlight(highlight));
+    }
+
+    [HttpPost("/api/highlights/{id:guid}/items")]
+    public async Task<IActionResult> AddHighlightItems(Guid id, [FromBody] HighlightItemsBody body)
+    {
+        var me = DtoMapper.GetUserId(User);
+        var highlight = await _db.Highlights.Include(h => h.Items).FirstOrDefaultAsync(h => h.Id == id && h.UserId == me);
+        if (highlight == null) return NotFound();
+        var pieces = (body.Items ?? new List<HighlightItemInput>())
+            .Where(i => !string.IsNullOrWhiteSpace(i.MediaUrl))
+            .Select(i => new HighlightItemInput
+            {
+                MediaUrl = i.MediaUrl.Trim(),
+                MediaType = string.IsNullOrWhiteSpace(i.MediaType) ? "image" : i.MediaType!,
+                Text = i.Text ?? ""
+            })
+            .ToList();
+        if (pieces.Count == 0) return BadRequest(new { message = "Hekaye sec" });
+
+        foreach (var piece in pieces)
+        {
+            if (highlight.Items.Any(i => i.MediaUrl == piece.MediaUrl)) continue;
+            var item = new HighlightItem
+            {
+                HighlightId = highlight.Id,
+                MediaUrl = piece.MediaUrl,
+                MediaType = piece.MediaType ?? "image",
+                Text = piece.Text ?? ""
+            };
+            _db.HighlightItems.Add(item);
+            _db.Entry(item).State = EntityState.Added;
+            highlight.Items.Add(item);
+        }
+
+        if (string.IsNullOrWhiteSpace(highlight.CoverUrl))
+            highlight.CoverUrl = highlight.Items.OrderBy(i => i.CreatedAt).LastOrDefault()?.MediaUrl ?? "";
+        highlight.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return Ok(MapHighlight(highlight));
+    }
+
+    [HttpDelete("/api/highlights/{id:guid}/items/{itemId:guid}")]
+    public async Task<IActionResult> RemoveHighlightItem(Guid id, Guid itemId)
+    {
+        var me = DtoMapper.GetUserId(User);
+        var highlight = await _db.Highlights.Include(h => h.Items).FirstOrDefaultAsync(h => h.Id == id && h.UserId == me);
+        if (highlight == null) return NotFound();
+        var item = highlight.Items.FirstOrDefault(i => i.Id == itemId);
+        if (item == null) return NotFound();
+        _db.HighlightItems.Remove(item);
+        highlight.Items.Remove(item);
+        if (highlight.Items.Count == 0)
+        {
+            _db.Highlights.Remove(highlight);
+            await _db.SaveChangesAsync();
+            return Ok(new { deleted = true });
+        }
+        if (string.IsNullOrWhiteSpace(highlight.CoverUrl) || highlight.CoverUrl == item.MediaUrl)
+            highlight.CoverUrl = highlight.Items.OrderBy(i => i.CreatedAt).Last().MediaUrl;
+        highlight.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return Ok(MapHighlight(highlight));
     }
 
     [AllowAnonymous]
@@ -186,14 +315,10 @@ public class StoriesController : ControllerBase
             if (user.IsPrivate && !(me.HasValue && await _db.Follows.AnyAsync(f => f.FollowerId == me && f.FollowingId == user.Id)))
                 return Ok(Array.Empty<object>());
         }
-        var list = await _db.Highlights.Include(h => h.Items).Where(h => h.UserId == user.Id).ToListAsync();
-        return Ok(list.Select(h => new
-        {
-            id = h.Id.ToString(),
-            name = h.Name,
-            coverUrl = h.CoverUrl,
-            items = h.Items.Select(i => new { id = i.Id.ToString(), mediaUrl = i.MediaUrl, mediaType = i.MediaType, text = i.Text })
-        }));
+        var list = await _db.Highlights.Include(h => h.Items).Where(h => h.UserId == user.Id)
+            .OrderByDescending(h => h.UpdatedAt ?? h.CreatedAt)
+            .ToListAsync();
+        return Ok(list.Select(MapHighlight));
     }
 
     [HttpDelete("/api/highlights/{id:guid}")]
@@ -206,6 +331,58 @@ public class StoriesController : ControllerBase
         _db.Highlights.Remove(highlight);
         await _db.SaveChangesAsync();
         return Ok(new { message = "Silindi" });
+    }
+
+    private static object MapHighlight(Highlight h)
+    {
+        var items = h.Items.OrderBy(i => i.CreatedAt).Select(i => new
+        {
+            id = i.Id.ToString(),
+            mediaUrl = i.MediaUrl,
+            mediaType = i.MediaType,
+            text = i.Text
+        }).ToList();
+        var cover = string.IsNullOrWhiteSpace(h.CoverUrl)
+            ? items.LastOrDefault()?.mediaUrl ?? ""
+            : h.CoverUrl;
+        return new
+        {
+            id = h.Id.ToString(),
+            name = h.Name,
+            coverUrl = cover,
+            items
+        };
+    }
+
+    private static List<HighlightItemInput> NormalizeItems(HighlightBody body)
+    {
+        var list = new List<HighlightItemInput>();
+        if (body.Items != null)
+        {
+            foreach (var i in body.Items)
+            {
+                if (string.IsNullOrWhiteSpace(i.MediaUrl)) continue;
+                list.Add(new HighlightItemInput
+                {
+                    MediaUrl = i.MediaUrl.Trim(),
+                    MediaType = string.IsNullOrWhiteSpace(i.MediaType) ? "image" : i.MediaType!,
+                    Text = i.Text ?? ""
+                });
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(body.MediaUrl))
+        {
+            list.Add(new HighlightItemInput
+            {
+                MediaUrl = body.MediaUrl.Trim(),
+                MediaType = string.IsNullOrWhiteSpace(body.MediaType) ? "image" : body.MediaType!,
+                Text = body.Text ?? ""
+            });
+        }
+        return list
+            .GroupBy(i => i.MediaUrl)
+            .Select(g => g.First())
+            .ToList();
     }
 
     private async Task<List<Guid>> HiddenUserIds(Guid me)
@@ -247,7 +424,28 @@ public class StoryReplyBody { public string? Text { get; set; } }
 
 public class HighlightBody
 {
+    public string? HighlightId { get; set; }
     public string? Name { get; set; }
+    public string? CoverUrl { get; set; }
+    public string? MediaUrl { get; set; }
+    public string? MediaType { get; set; }
+    public string? Text { get; set; }
+    public List<HighlightItemInput>? Items { get; set; }
+}
+
+public class HighlightUpdateBody
+{
+    public string? Name { get; set; }
+    public string? CoverUrl { get; set; }
+}
+
+public class HighlightItemsBody
+{
+    public List<HighlightItemInput>? Items { get; set; }
+}
+
+public class HighlightItemInput
+{
     public string MediaUrl { get; set; } = "";
     public string? MediaType { get; set; }
     public string? Text { get; set; }

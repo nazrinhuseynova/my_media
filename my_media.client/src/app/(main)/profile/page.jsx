@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../../../services/api";
 import { useAuthStore } from "../../../features/auth/store/useAuthStore";
@@ -9,6 +9,8 @@ import { formatCount, asUtc } from "../../../utils/formatDate";
 import { notify } from "../../../stores/useNoticeStore";
 import { useAccountSheet } from "../../../features/auth/components/AccountSheet";
 import { ProfileSkeleton } from "../../../components/ui/Skeleton";
+import ProfileGrid from "../../../features/profile/components/ProfileGrid";
+import HighlightRail from "../../../features/profile/components/HighlightRail";
 
 const MONTHS = ["yanvar", "fevral", "mart", "aprel", "may", "iyun", "iyul", "avqust", "sentyabr", "oktyabr", "noyabr", "dekabr"];
 
@@ -33,8 +35,9 @@ export default function ProfilePage() {
   const [data, setData] = useState(null);
   const [list, setList] = useState(null);
   const [highlights, setHighlights] = useState([]);
-  const [openHighlight, setOpenHighlight] = useState(null);
   const [views, setViews] = useState(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
 
   async function load(nextPage = 1) {
     const d = await api.get(`/api/users/${username}`, { params: { page: nextPage, pageSize: 12 } });
@@ -55,9 +58,18 @@ export default function ProfilePage() {
     load();
   }, [username]);
 
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onDoc(e) {
+      if (!menuRef.current?.contains(e.target)) setMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [menuOpen]);
+
   if (!data) return <ProfileSkeleton />;
   const { user, followers, following, posts, relation, blocked, restricted } = data;
-  const isMe = me.id === user.id;
+  const isMe = me?.id === user.id;
   const hidden = !!restricted || (user.isPrivate && !isMe && relation !== "following");
 
   async function follow() {
@@ -104,6 +116,26 @@ export default function ProfilePage() {
                   <>
                     <Link className="btn btn-ghost" to="/settings">Profili redaktə et</Link>
                     <button type="button" className="btn btn-ghost" onClick={async () => setViews(await api.get("/api/profile/views"))}>Kim baxıb</button>
+                    <div className="profile-menu-wrap" ref={menuRef}>
+                      <button
+                        type="button"
+                        className="profile-menu-btn"
+                        aria-label="Daha çox"
+                        aria-haspopup="menu"
+                        aria-expanded={menuOpen}
+                        onClick={() => setMenuOpen((open) => !open)}
+                      >
+                        <span className="profile-menu-lines" aria-hidden="true">
+                          <i /><i /><i />
+                        </span>
+                      </button>
+                      {menuOpen ? (
+                        <div className="profile-menu" role="menu">
+                          <Link to="/liked" role="menuitem" onClick={() => setMenuOpen(false)}>Bəyəndiklər</Link>
+                          <Link to="/saved" role="menuitem" onClick={() => setMenuOpen(false)}>Saxlanılanlar</Link>
+                        </div>
+                      ) : null}
+                    </div>
                   </>
                 ) : (
                   <>
@@ -155,15 +187,11 @@ export default function ProfilePage() {
         </div>
       </section>
 
-      {highlights.length ? (
-        <div className="highlight-row">
-          {highlights.map((h) => (
-            <button key={h.id} type="button" className="highlight-chip" onClick={() => setOpenHighlight(h)}>
-              {h.name}
-            </button>
-          ))}
-        </div>
-      ) : null}
+      <HighlightRail
+        highlights={highlights}
+        isMe={isMe}
+        onChanged={() => api.get(`/api/users/${username}/highlights`).then(setHighlights).catch(() => setHighlights([]))}
+      />
 
       {posts.length && !hidden ? (
         <>
@@ -178,15 +206,6 @@ export default function ProfilePage() {
         </div>
       )}
 
-      <Modal open={!!openHighlight} onClose={() => setOpenHighlight(null)} title={openHighlight?.name || "Seçilmiş"}>
-        {openHighlight?.items?.map((item) => (
-          <div key={item.id} className="highlight-slide">
-            {item.mediaType === "video" ? <video src={item.mediaUrl} controls /> : <img src={item.mediaUrl} alt="" />}
-            {item.text ? <p>{item.text}</p> : null}
-          </div>
-        ))}
-        {isMe && openHighlight ? <Button variant="ghost" type="button" onClick={async () => { await api.delete(`/api/highlights/${openHighlight.id}`); setOpenHighlight(null); notify("Seçilmiş silindi"); load(); }}>Sil</Button> : null}
-      </Modal>
       <Modal open={!!views} onClose={() => setViews(null)} title="Profilə baxanlar">
         {views?.enabled === false ? (
           <p className="muted">Baxışlar bağlıdır. Ayarlardan «Profil baxışları»nı açanda son 7 günün siyahısını görürsən.</p>
