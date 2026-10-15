@@ -2,9 +2,11 @@ import { useCallback, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import Input from "../../../components/ui/Input";
 import Button from "../../../components/ui/Button";
-import { validateRegister } from "../../../utils/validators";
-import { authApi, authMessage } from "../../../features/auth/services/authApi";
-import { useAuthStore } from "../../../features/auth/store/useAuthStore";
+import { validateRegisterEn } from "../../../utils/validators";
+import { authApi, guestMessage } from "../../../features/auth/services/authApi";
+import { openHome, useAuthStore } from "../../../features/auth/store/useAuthStore";
+import { rememberAccount } from "../../../features/auth/accountVault";
+import { armTour } from "../../../features/tour/tourFlag";
 import ProviderButtons from "../../../features/auth/components/ProviderButtons";
 
 export default function RegisterPage() {
@@ -23,6 +25,7 @@ export default function RegisterPage() {
   const [errors, setErrors] = useState({});
   const [formError, setFormError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [fresh, setFresh] = useState(false);
 
   function change(e) {
     setValues({ ...values, [e.target.name]: e.target.value });
@@ -30,7 +33,7 @@ export default function RegisterPage() {
 
   async function submit(e) {
     e.preventDefault();
-    const next = validateRegister(values);
+    const next = validateRegisterEn(values);
     setErrors(next);
     if (Object.keys(next).length) return;
     setBusy(true);
@@ -44,9 +47,16 @@ export default function RegisterPage() {
         confirmPassword: values.confirmPassword,
       };
       const data = await authApi.register(payload);
+      if (data?.token && data?.user) {
+        armTour(data.user);
+        rememberAccount(data.user, data.token, data.refreshToken);
+        useAuthStore.setState({ user: data.user, loading: false });
+        await openHome(data.user, navigate);
+        return;
+      }
       navigate("/otp", { state: { userId: data.userId, mode: "register", contact: payload.contact } });
     } catch (err) {
-      setFormError(authMessage(err, "Qeydiyyat alınmadı"));
+      setFormError(guestMessage(err, "Couldn't sign up"));
     } finally {
       setBusy(false);
     }
@@ -56,35 +66,33 @@ export default function RegisterPage() {
     setBusy(true);
     setFormError("");
     try {
-      await social(kind, { idToken, fullName: `${values.firstName} ${values.lastName}`.trim() });
-      window.location.assign("/");
+      const user = await social(kind, { idToken, fullName: `${values.firstName} ${values.lastName}`.trim(), adding });
+      await openHome(user, navigate);
     } catch (err) {
-      setFormError(authMessage(err, "Qeydiyyat alınmadı"));
+      setFormError(guestMessage(err, "Couldn't sign up"));
       setBusy(false);
     }
-  }, [social, values.firstName, values.lastName]);
+  }, [social, values.firstName, values.lastName, adding, navigate]);
 
   return (
-    <div className="auth-wrap auth-wrap-register">
+    <div className="auth-wrap auth-wrap-register" data-keep>
       <div className="card auth-card">
-        <h1 className="brand">Pulse</h1>
-        <p className="muted auth-lead">Email ilə qeydiyyat. Kod emailinə gedir, təsdiqdən sonra hesab açılır.</p>
+        <h1 className="brand" data-keep>Pulse</h1>
+        <p className="muted auth-lead">Sign up with email. A code is sent to that email, then the account opens.</p>
         <form autoComplete="off" onSubmit={submit}>
-          <input tabIndex={-1} aria-hidden="true" autoComplete="username" style={{ position: "absolute", left: "-9999px", height: 0, width: 0, opacity: 0 }} />
-          <input type="password" tabIndex={-1} aria-hidden="true" autoComplete="current-password" style={{ position: "absolute", left: "-9999px", height: 0, width: 0, opacity: 0 }} />
           <div className="auth-row">
-            <Input name="firstName" label="Ad" value={values.firstName} onChange={change} error={errors.firstName} autoComplete="off" />
-            <Input name="lastName" label="Soyad" value={values.lastName} onChange={change} error={errors.lastName} autoComplete="off" />
+            <Input name="firstName" label="First name" value={values.firstName} onChange={change} error={errors.firstName} autoComplete="off" />
+            <Input name="lastName" label="Last name" value={values.lastName} onChange={change} error={errors.lastName} autoComplete="off" />
           </div>
           <Input name="username" label="Username" value={values.username} onChange={change} error={errors.username} autoComplete="off" />
-          <Input name="contact" label="Email" value={values.contact} onChange={change} error={errors.contact} autoComplete="off" />
-          <Input name="password" type="password" label="Şifrə" value={values.password} onChange={change} error={errors.password} autoComplete="off" />
-          <Input name="confirmPassword" type="password" label="Şifrəni təkrarla" value={values.confirmPassword} onChange={change} error={errors.confirmPassword} autoComplete="off" />
+          <Input name="contact" label="Email" type="email" value={values.contact} onChange={change} error={errors.contact} autoComplete="off" inputMode="email" spellCheck={false} />
+          <Input name="password" type="password" label="Password" value={values.password} onChange={change} error={errors.password} autoComplete="new-password" readOnly={!fresh} onFocus={() => setFresh(true)} />
+          <Input name="confirmPassword" type="password" label="Repeat password" value={values.confirmPassword} onChange={change} error={errors.confirmPassword} autoComplete="new-password" readOnly={!fresh} onFocus={() => setFresh(true)} />
           {formError ? <p className="error-text">{formError}</p> : null}
-          <Button disabled={busy} type="submit">{busy ? "Gözləyin..." : "Qeydiyyat"}</Button>
+          <Button disabled={busy} type="submit">{busy ? "Please wait..." : "Sign up"}</Button>
         </form>
         <ProviderButtons divider busy={busy} onToken={onToken} onError={setFormError} />
-        <p className="muted auth-switch-inline">Hesabın var? <Link to={adding ? "/login?add=1" : "/login"}>Giriş</Link></p>
+        <p className="muted auth-switch-inline">Already have an account? <Link to={adding ? "/login?add=1" : "/login"}>Log in</Link></p>
       </div>
     </div>
   );

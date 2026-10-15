@@ -55,6 +55,38 @@ export function validateOtp(code) {
   return "";
 }
 
+export function validatePasswordEn(value) {
+  if (!value || value.length < 8) return "Use at least 8 characters";
+  if (!/[a-z]/.test(value) || !/[0-9]/.test(value)) return "Include a lowercase letter and a number";
+  return "";
+}
+
+export function validateRegisterEn(values) {
+  const errors = {};
+  if (!values.firstName || values.firstName.trim().length < 2) errors.firstName = "First name needs at least 2 characters";
+  if (!values.lastName || values.lastName.trim().length < 2) errors.lastName = "Last name needs at least 2 characters";
+  if (!isUsername(values.username || "")) errors.username = "Use 3–20 characters: letters, numbers, . and _";
+  const contact = (values.contact || "").trim();
+  if (!contact) errors.contact = "Enter an email";
+  else if (!isEmail(contact)) errors.contact = "Enter a valid email";
+  const passwordError = validatePasswordEn(values.password);
+  if (passwordError) errors.password = passwordError;
+  if (values.password !== values.confirmPassword) errors.confirmPassword = "Passwords don't match";
+  return errors;
+}
+
+export function validateLoginEn(values) {
+  const errors = {};
+  if (!(values.contact || "").trim()) errors.contact = "Enter an email, phone, or username";
+  if (!(values.password || "").trim()) errors.password = "Enter your password";
+  return errors;
+}
+
+export function validateOtpEn(code) {
+  if (!/^[0-9]{6}$/.test(code || "")) return "Enter the 6-digit code";
+  return "";
+}
+
 export function extractHashtags(text) {
   return Array.from(new Set((text.match(/#([a-zA-Z0-9_əöğıüçşƏÖĞIÜÇŞ]+)/g) || []).map((t) => t.slice(1).toLowerCase())));
 }

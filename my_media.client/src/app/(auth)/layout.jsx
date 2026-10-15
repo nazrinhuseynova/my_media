@@ -7,6 +7,7 @@ export default function AuthLayout() {
   const [params] = useSearchParams();
   const adding = params.get("add") === "1";
   if (loading) return <div className="auth-wrap"><div className="spinner" /></div>;
+  if (user?.role === "admin" && adding) return <Navigate to="/admin" replace />;
   if (user && !adding) return <Navigate to="/" replace />;
   return <Outlet />;
 }

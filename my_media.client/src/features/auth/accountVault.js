@@ -22,7 +22,11 @@ export function tokenHasSession(token) {
   }
 }
 
-export function readAccounts() {
+function isDesk(row) {
+  return row?.role === "admin" || String(row?.username || "").toLowerCase() === "admin";
+}
+
+function readRaw() {
   try {
     const list = JSON.parse(localStorage.getItem(KEY) || "[]");
     if (!Array.isArray(list)) return [];
@@ -30,6 +34,19 @@ export function readAccounts() {
   } catch {
     return [];
   }
+}
+
+export function readAccounts() {
+  const list = readRaw();
+  const visible = list.filter((row) => !isDesk(row));
+  if (visible.length !== list.length) {
+    const active = localStorage.getItem("pulse_refresh");
+    list.filter(isDesk).forEach((row) => {
+      if (row.refreshToken && row.refreshToken !== active) revokeRefresh(row.refreshToken);
+    });
+    write(visible);
+  }
+  return visible;
 }
 
 function write(list) {
@@ -46,26 +63,37 @@ export async function revokeRefresh(refreshToken) {
 
 export function rememberAccount(user, token, refreshToken) {
   if (!user?.id || !refreshToken) return;
-  const previous = readAccounts().find((row) => row.id === user.id);
+  localStorage.setItem("pulse_token", token || "");
+  localStorage.setItem("pulse_refresh", refreshToken);
+  if (isDesk(user)) {
+    const leftover = readRaw().filter((row) => isDesk(row) && row.refreshToken !== refreshToken);
+    leftover.forEach((row) => revokeRefresh(row.refreshToken));
+    write(readRaw().filter((row) => !isDesk(row)));
+    return;
+  }
+  const previous = readRaw().find((row) => row.id === user.id);
   const row = {
     id: user.id,
     username: user.username || "",
     fullName: user.fullName || "",
     avatar: user.avatar || "",
+    role: user.role || "user",
     token: token || "",
     refreshToken,
   };
-  const rest = readAccounts().filter((item) => item.id !== row.id);
+  const rest = readRaw().filter((item) => item.id !== row.id && !isDesk(item));
   const overflow = rest.slice(LIMIT - 1);
   write([row, ...rest.slice(0, LIMIT - 1)]);
-  localStorage.setItem("pulse_token", row.token);
-  localStorage.setItem("pulse_refresh", row.refreshToken);
   if (previous && previous.refreshToken !== row.refreshToken) revokeRefresh(previous.refreshToken);
   overflow.forEach((item) => revokeRefresh(item.refreshToken));
 }
 
 export function touchSession(oldRefresh, token, refreshToken, user) {
-  const list = readAccounts();
+  if (isDesk(user)) {
+    rememberAccount(user, token, refreshToken);
+    return;
+  }
+  const list = readRaw().filter((row) => !isDesk(row));
   const index = list.findIndex((row) => row.refreshToken === oldRefresh || (user && row.id === user.id));
   if (index < 0) {
     if (user) rememberAccount(user, token, refreshToken);
@@ -79,6 +107,7 @@ export function touchSession(oldRefresh, token, refreshToken, user) {
     username: user?.username || current.username,
     fullName: user?.fullName || current.fullName,
     avatar: user?.avatar || current.avatar,
+    role: user?.role || current.role || "user",
   };
   write([next, ...list.filter((_, i) => i !== index)]);
   localStorage.setItem("pulse_token", next.token);
@@ -103,6 +132,12 @@ export function dropActiveAccount() {
   localStorage.removeItem("pulse_token");
   localStorage.removeItem("pulse_refresh");
   return list[0] || null;
+}
+
+export function homeFor(user) {
+  if (user?.role === "admin") return "/admin";
+  if (!user?.language) return "/welcome";
+  return "/";
 }
 
 export async function exchange(refreshToken) {

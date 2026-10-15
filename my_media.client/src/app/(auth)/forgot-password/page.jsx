@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Input from "../../../components/ui/Input";
 import Button from "../../../components/ui/Button";
-import { authApi, authMessage } from "../../../features/auth/services/authApi";
+import { authApi, guestMessage } from "../../../features/auth/services/authApi";
 
 export default function ForgotPage() {
   const navigate = useNavigate();
@@ -12,24 +12,24 @@ export default function ForgotPage() {
   async function submit(e) {
     e.preventDefault();
     if (!contact) {
-      setError("Email, telefon və ya username yazın");
+      setError("Enter an email, phone, or username");
       return;
     }
     try {
       const data = await authApi.forgot({ contact });
       navigate("/otp", { state: { userId: data.userId, mode: "reset", contact } });
     } catch (err) {
-      setError(authMessage(err, "İstifadəçi tapılmadı"));
+      setError(guestMessage(err, "No account found"));
     }
   }
 
   return (
-    <div className="auth-wrap">
+    <div className="auth-wrap" data-keep>
       <div className="card auth-card">
-        <h1>Şifrəni unutdum</h1>
+        <h1>Forgot password</h1>
         <form onSubmit={submit}>
-          <Input value={contact} onChange={(e) => setContact(e.target.value)} label="Email / telefon / username" error={error} />
-          <Button type="submit">Kod göndər</Button>
+          <Input value={contact} onChange={(e) => setContact(e.target.value)} label="Email, phone, or username" error={error} />
+          <Button type="submit">Send code</Button>
         </form>
       </div>
     </div>

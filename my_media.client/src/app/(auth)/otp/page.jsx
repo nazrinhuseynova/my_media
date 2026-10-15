@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import Input from "../../../components/ui/Input";
 import Button from "../../../components/ui/Button";
-import { validateOtp } from "../../../utils/validators";
-import { authApi, authMessage } from "../../../features/auth/services/authApi";
-import { useAuthStore } from "../../../features/auth/store/useAuthStore";
+import { validateOtpEn } from "../../../utils/validators";
+import { authApi, guestMessage } from "../../../features/auth/services/authApi";
+import { openHome, useAuthStore } from "../../../features/auth/store/useAuthStore";
 import { deviceLabel } from "../../../features/auth/accountVault";
+import { armTour } from "../../../features/tour/tourFlag";
 
 export default function OtpPage() {
   const loc = useLocation();
@@ -24,10 +25,10 @@ export default function OtpPage() {
   async function submit(e) {
     e.preventDefault();
     if (!loc.state?.userId) {
-      setError("Kod səhifəsinə qeydiyyat və ya şifrə bərpasından gəlin");
+      setError("Open this page from sign up or password reset");
       return;
     }
-    const msg = validateOtp(code);
+    const msg = validateOtpEn(code);
     if (msg) {
       setError(msg);
       return;
@@ -40,15 +41,16 @@ export default function OtpPage() {
         return;
       }
       if (!data.token) {
-        setError("Token alınmadı, yenidən daxil olun");
+        setError("Sign-in didn't finish. Try again");
         return;
       }
+      if (loc.state?.mode === "register") armTour(data.user);
       localStorage.setItem("pulse_token", data.token);
       if (data.refreshToken) localStorage.setItem("pulse_refresh", data.refreshToken);
       setUser(data.user);
-      window.location.assign("/");
+      await openHome(data.user, navigate);
     } catch (err) {
-      setError(authMessage(err, "Kod yanlışdır"));
+      setError(guestMessage(err, "That code is wrong or expired"));
     } finally {
       setBusy(false);
     }
@@ -64,28 +66,28 @@ export default function OtpPage() {
       });
       setSeconds(60);
     } catch (err) {
-      setError(authMessage(err, "Kod göndərilmədi"));
+      setError(guestMessage(err, "Couldn't send the code"));
     }
   }
 
   return (
-    <div className="auth-wrap">
+    <div className="auth-wrap" data-keep>
       <div className="card auth-card">
-        <h1>Təsdiq</h1>
+        <h1>Confirmation</h1>
         <p className="muted">
           {loc.state?.contact
-            ? `Kod ${loc.state.contact} ünvanına göndərildi. Təsdiqdən sonra qeydiyyat tamamlanır.`
-            : "Kod emailinə göndərildi. Təsdiqdən sonra davam edə bilərsən."}
+            ? `A code was sent to ${loc.state.contact}. Enter it to finish.`
+            : "A code was sent to your email. Enter it to continue."}
           {" "}
           {seconds
-            ? `Yenidən göndərmək üçün ${seconds} san`
-            : "Kodu almamısansa, yenidən göndər"}
+            ? `You can resend it in ${seconds}s`
+            : "Didn't get the code? Send it again"}
         </p>
         <form onSubmit={submit}>
-          <Input value={code} onChange={(e) => setCode(e.target.value)} label="6 rəqəmli kod" maxLength={6} error={error} />
-          <Button disabled={busy} type="submit">{busy ? "Gözləyin..." : "Təsdiqlə"}</Button>
+          <Input value={code} onChange={(e) => setCode(e.target.value)} label="6-digit code" maxLength={6} error={error} />
+          <Button disabled={busy} type="submit">{busy ? "Please wait..." : "Confirm"}</Button>
         </form>
-        <Button variant="ghost" type="button" disabled={seconds > 0} onClick={resend}>Kodu yenidən göndər</Button>
+        <Button variant="ghost" type="button" disabled={seconds > 0} onClick={resend}>Send code again</Button>
       </div>
     </div>
   );

@@ -89,9 +89,64 @@ async function appleCredential(clientId) {
   return token;
 }
 
+let facebookReady = null;
+
+function prepareFacebook(appId) {
+  if (window.FB) {
+    window.FB.init({ appId, cookie: false, xfbml: false, version: "v21.0" });
+    return Promise.resolve();
+  }
+  if (facebookReady) return facebookReady;
+  facebookReady = new Promise((resolve, reject) => {
+    window.fbAsyncInit = () => {
+      window.FB.init({ appId, cookie: false, xfbml: false, version: "v21.0" });
+      resolve();
+    };
+    const script = document.createElement("script");
+    script.id = "pulse-facebook-sdk";
+    script.src = "https://connect.facebook.net/en_US/sdk.js";
+    script.async = true;
+    script.crossOrigin = "anonymous";
+    script.onerror = () => {
+      facebookReady = null;
+      reject(new Error("Skript yüklənmədi"));
+    };
+    document.body.appendChild(script);
+  });
+  return facebookReady;
+}
+
+function facebookCredential(appId) {
+  return prepareFacebook(appId).then(() => new Promise((resolve, reject) => {
+    window.FB.login((response) => {
+      const token = response?.authResponse?.accessToken;
+      if (token) resolve(token);
+      else reject(new Error("cancelled"));
+    }, { scope: "email,public_profile" });
+  }));
+}
+
 function cancelled(err) {
   const text = `${err?.error || ""} ${err?.message || ""}`;
   return /cancelled|popup_closed|user_cancelled/i.test(text);
+}
+
+function providerId(data, kind) {
+  if (kind === "google") return data?.googleClientId;
+  if (kind === "apple") return data?.appleClientId;
+  return data?.facebookAppId;
+}
+
+function missingText(kind) {
+  if (kind === "google") return "Google sign-in isn't available right now";
+  if (kind === "apple") return "Apple sign-in isn't available right now";
+  return "Facebook sign-in isn't available right now";
+}
+
+function failedText(kind) {
+  if (kind === "google") return "Google sign-in didn't work";
+  if (kind === "apple") return "Apple sign-in didn't work";
+  return "Facebook sign-in didn't work";
 }
 
 export default function ProviderButtons({ busy, divider, onToken, onError }) {
@@ -103,18 +158,22 @@ export default function ProviderButtons({ busy, divider, onToken, onError }) {
     onError("");
     try {
       const data = await api.get("/api/auth/providers");
-      const clientId = kind === "google" ? data?.googleClientId : data?.appleClientId;
+      const clientId = providerId(data, kind);
       if (!clientId) {
-        onError(kind === "google" ? "Google ClientId appsettings-də boşdur" : "Apple ClientId appsettings-də boşdur");
+        onError(missingText(kind));
         return;
       }
       if (kind === "google") {
         await loadScript("https://accounts.google.com/gsi/client", "pulse-google-sdk");
       }
-      const token = kind === "google" ? await googleCredential(clientId) : await appleCredential(clientId);
+      const token = kind === "google"
+        ? await googleCredential(clientId)
+        : kind === "apple"
+          ? await appleCredential(clientId)
+          : await facebookCredential(clientId);
       await onToken(kind, token);
     } catch (err) {
-      if (!cancelled(err)) onError(err?.message || (kind === "google" ? "Google ilə daxil olmaq alınmadı" : "Apple ilə daxil olmaq alınmadı"));
+      if (!cancelled(err)) onError(err?.message || failedText(kind));
     } finally {
       setPending("");
     }
@@ -122,13 +181,16 @@ export default function ProviderButtons({ busy, divider, onToken, onError }) {
 
   return (
     <>
-      {divider ? <div className="auth-or"><span>və ya</span></div> : null}
+      {divider ? <div className="auth-or"><span>or</span></div> : null}
       <div className="auth-providers">
+        <Button className="auth-provider" variant="ghost" type="button" disabled={busy || !!pending} onClick={() => start("facebook")}>
+          {pending === "facebook" ? "Opening Facebook..." : "Continue with Facebook"}
+        </Button>
         <Button className="auth-provider" variant="ghost" type="button" disabled={busy || !!pending} onClick={() => start("google")}>
-          {pending === "google" ? "Google açılır..." : "Google ilə daxil ol"}
+          {pending === "google" ? "Opening Google..." : "Continue with Google"}
         </Button>
         <Button className="auth-provider" variant="ghost" type="button" disabled={busy || !!pending} onClick={() => start("apple")}>
-          {pending === "apple" ? "Apple açılır..." : "Apple ilə daxil ol"}
+          {pending === "apple" ? "Opening Apple..." : "Continue with Apple"}
         </Button>
       </div>
     </>

@@ -8,11 +8,26 @@ const http = axios.create({
   timeout: 30000,
 });
 
+function plainMessage(message) {
+  const text = String(message || "");
+  if (!text) return text;
+  if (/email serveri ayarlanmayıb|təsdiq kodu yalnız emailə|kod göndərilmədi/i.test(text)) return "Kodu göndərmək alınmadı. Bir az sonra yenidən cəhd et";
+  if (/clientid|appsettings/i.test(text)) return "Bu üsulla daxil olmaq hazırda mümkün deyil";
+  if (/cloudinary/i.test(text)) return "Fayl yüklənmədi";
+  if (/google (təsdiq tokeni|tokeni|açarları)/i.test(text)) return "Google ilə daxil olmaq alınmadı";
+  if (/apple (təsdiq tokeni|tokeni|açarları)/i.test(text)) return "Apple ilə daxil olmaq alınmadı";
+  if (/facebook (təsdiq tokeni|tokeni|açarları)/i.test(text)) return "Facebook ilə daxil olmaq alınmadı";
+  if (/tokenin içində email/i.test(text)) return "Bu hesabın emaili görünmür";
+  if (/exception|stack trace|smtp|jwt |object reference|sql exception/i.test(text)) return "Bu əməliyyat alınmadı";
+  return text;
+}
+
 const AUTH_OPEN = [
   "/api/auth/login",
   "/api/auth/register",
   "/api/auth/google",
   "/api/auth/apple",
+  "/api/auth/facebook",
   "/api/auth/verify-otp",
   "/api/auth/forgot-password",
   "/api/auth/reset-password",
@@ -22,6 +37,10 @@ const AUTH_OPEN = [
 ];
 
 http.interceptors.request.use((config) => {
+  if (config.skipAuth) {
+    delete config.headers?.Authorization;
+    return config;
+  }
   const token = localStorage.getItem("pulse_token");
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -32,6 +51,10 @@ http.interceptors.request.use((config) => {
 http.interceptors.response.use(
   (res) => res,
   async (error) => {
+    const raw = error.response?.data?.message;
+    if (typeof raw === "string" && error.response?.data) {
+      error.response.data.message = plainMessage(raw);
+    }
     const status = error.response?.status;
     const url = error.config?.url || "";
     const openAuth = AUTH_OPEN.some((path) => url.includes(path));
@@ -54,7 +77,8 @@ http.interceptors.response.use(
       if (next) {
         localStorage.setItem("pulse_token", next.token);
         localStorage.setItem("pulse_refresh", next.refreshToken);
-        window.location.assign("/");
+        try { sessionStorage.setItem("pulse_skip_intro", "1"); } catch { /* ignore */ }
+        window.location.assign(next.role === "admin" ? "/admin" : "/");
         return Promise.reject(error);
       }
       import("../features/auth/store/useAuthStore").then(({ useAuthStore }) => {
