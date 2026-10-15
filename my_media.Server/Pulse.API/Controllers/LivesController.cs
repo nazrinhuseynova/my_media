@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Pulse.API.Helpers;
 using Pulse.Infrastructure.Persistence;
+using Pulse.Infrastructure.Realtime;
 
 namespace Pulse.API.Controllers;
 
@@ -64,6 +65,37 @@ public class LivesController : ControllerBase
         return Ok(items);
     }
 
+    [HttpGet("/api/lives/{id:guid}")]
+    public async Task<IActionResult> Get(Guid id)
+    {
+        var me = DtoMapper.GetUserId(User);
+        var since = DateTime.UtcNow.AddHours(-4);
+        var room = await _db.LiveRooms.AsNoTracking()
+            .Include(r => r.Seats).ThenInclude(s => s.User)
+            .FirstOrDefaultAsync(r => r.Id == id && r.EndedAt == null && r.CreatedAt >= since);
+        if (room == null) return NotFound(new { message = "Canlı yayım bitib" });
+        var people = room.Seats.OrderBy(s => s.SortOrder)
+            .Where(s => s.User != null && s.User.IsActive && !s.User.IsBanned)
+            .Select(s => new
+            {
+                id = s.UserId.ToString(),
+                username = s.User!.UserName,
+                fullName = s.User.FullName,
+                avatar = s.User.AvatarUrl,
+                host = s.SortOrder == 0,
+                sortOrder = s.SortOrder
+            }).ToList();
+        return Ok(new
+        {
+            id = room.Id.ToString(),
+            title = room.Title,
+            people,
+            isHost = people.Any(p => p.id == me.ToString() && p.host),
+            inRoom = people.Any(p => p.id == me.ToString()),
+            seatsLeft = Math.Max(0, LiveHub.MaxSeats - people.Count)
+        });
+    }
+
     [HttpPost("/api/lives")]
     public async Task<IActionResult> Start([FromBody] LiveStartBody? body)
     {
@@ -90,6 +122,8 @@ public class LivesController : ControllerBase
         var room = await OpenRoom(id);
         if (room == null) return NotFound(new { message = "Canlı yayım bitib" });
         if (room.Seats.Any(s => s.UserId == me)) return Ok(new { id = room.Id.ToString(), joined = true });
+        if (room.Seats.Count >= LiveHub.MaxSeats)
+            return StatusCode(403, new { message = $"Bir yayımda ən çox {LiveHub.MaxSeats} nəfər ola bilər" });
         var host = room.Seats.OrderBy(s => s.SortOrder).FirstOrDefault();
         if (host == null) return NotFound(new { message = "Canlı yayım bitib" });
         var hostUser = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == host.UserId);
