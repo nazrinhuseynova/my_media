@@ -41,7 +41,8 @@ public class AuthController : ControllerBase
         return Ok(new
         {
             googleClientId = _config["Google:ClientId"] ?? "",
-            appleClientId = _config["Apple:ClientId"] ?? ""
+            appleClientId = _config["Apple:ClientId"] ?? "",
+            facebookAppId = _config["Facebook:AppId"] ?? ""
         });
     }
 
@@ -52,6 +53,11 @@ public class AuthController : ControllerBase
         var contact = (request.Contact ?? "").Trim();
         var fullName = (request.FullName ?? "").Trim();
         var passwordError = PasswordProblem(request.Password);
+        if (username.Equals("admin", StringComparison.OrdinalIgnoreCase))
+        {
+            return BadRequest(new { message = "Admin ayrıca hesabdır. Yeni hesab kimi açılmır" });
+        }
+
         if (username.Length < 3 || username.Length > 20 || username.Any(c => !char.IsLetterOrDigit(c) && c is not '.' and not '_'))
         {
             return BadRequest(new { message = "İstifadəçi adı 3-20 simvol, hərf, rəqəm, . və _ ola bilər" });
@@ -94,7 +100,8 @@ public class AuthController : ControllerBase
             FullName = fullName,
             AvatarUrl = $"https://i.pravatar.cc/300?u={username}",
             EmailConfirmed = false,
-            Provider = "email"
+            Provider = "email",
+            Language = null
         };
 
         var result = await _users.CreateAsync(user, request.Password);
@@ -109,10 +116,16 @@ public class AuthController : ControllerBase
         {
             await IssueOtpAsync(user, contact, "register");
         }
-        catch (InvalidOperationException ex)
+        catch (InvalidOperationException ex) when (ex.Message == "Email mövcud deyil")
         {
             await DropPendingUserAsync(user);
-            return StatusCode(503, new { message = ex.Message });
+            return BadRequest(new { message = ex.Message });
+        }
+        catch (InvalidOperationException)
+        {
+            user.EmailConfirmed = true;
+            await _users.UpdateAsync(user);
+            return Ok(await BuildLogin(user, null));
         }
         return Ok(new { message = "Kod emailinə göndərildi", userId = user.Id });
     }
@@ -135,35 +148,47 @@ public class AuthController : ControllerBase
             try
             {
                 await IssueOtpAsync(user, Mailbox(user, request.Contact), "register");
-            }
-            catch (InvalidOperationException ex)
-            {
-                return StatusCode(503, new { message = ex.Message });
-            }
-            return StatusCode(403, new
+                return StatusCode(403, new
             {
                 message = "Əvvəlcə emailə gələn kodu təsdiqləyin",
                 needsOtp = true,
                 userId = user.Id
             });
+            }
+            catch (InvalidOperationException ex) when (ex.Message == "Email mövcud deyil")
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (InvalidOperationException)
+            {
+                user.EmailConfirmed = true;
+                await _users.UpdateAsync(user);
+            }
         }
 
-        var blocked = CheckAccount(user);
+        var blocked = await CheckAccount(user);
         if (blocked != null) return blocked;
+        var desk = await RejectDeskAttach(user, request.Adding);
+        if (desk != null) return desk;
 
         return Ok(await BuildLogin(user, request.Device));
     }
 
     [HttpPost("google")]
     [HttpPost("apple")]
+    [HttpPost("facebook")]
     public async Task<IActionResult> Social(SocialLoginRequest request)
     {
-        var provider = Request.Path.Value!.Contains("google") ? "google" : "apple";
-        var audience = provider == "google" ? _config["Google:ClientId"] : _config["Apple:ClientId"];
+        var path = Request.Path.Value ?? "";
+        var provider = path.Contains("facebook", StringComparison.OrdinalIgnoreCase)
+            ? "facebook"
+            : path.Contains("google", StringComparison.OrdinalIgnoreCase) ? "google" : "apple";
         ProviderIdentity identity;
         try
         {
-            identity = await ProviderTokenVerifier.ReadAsync(provider, request.IdToken, audience);
+            identity = provider == "facebook"
+                ? await ProviderTokenVerifier.ReadFacebookAsync(request.IdToken, _config["Facebook:AppId"], _config["Facebook:AppSecret"])
+                : await ProviderTokenVerifier.ReadAsync(provider, request.IdToken, provider == "google" ? _config["Google:ClientId"] : _config["Apple:ClientId"]);
         }
         catch (InvalidOperationException ex)
         {
@@ -181,6 +206,7 @@ public class AuthController : ControllerBase
                 {
                     "google" => "Google",
                     "apple" => "Apple",
+                    "facebook" => "Facebook",
                     _ => "şifrə"
                 };
                 return Conflict(new { message = $"Bu email artıq {via} ilə qeydiyyatdadır. Həmin üsulla daxil ol." });
@@ -204,12 +230,13 @@ public class AuthController : ControllerBase
                 Email = email,
                 FullName = string.IsNullOrWhiteSpace(request.FullName)
                     ? (string.IsNullOrWhiteSpace(identity.Name)
-                        ? (provider == "google" ? "Google Istifadeci" : "Apple Istifadeci")
+                        ? ProviderPerson(provider)
                         : identity.Name)
                     : request.FullName.Trim(),
                 Provider = provider,
                 AvatarUrl = $"https://i.pravatar.cc/300?u={email}",
-                EmailConfirmed = true
+                EmailConfirmed = true,
+                Language = null
             };
             var created = await _users.CreateAsync(user, Guid.NewGuid().ToString("N") + "aA1");
             if (!created.Succeeded)
@@ -220,8 +247,10 @@ public class AuthController : ControllerBase
             await _users.AddToRoleAsync(user, "User");
         }
 
-        var blocked = CheckAccount(user);
+        var blocked = await CheckAccount(user);
         if (blocked != null) return blocked;
+        var desk = await RejectDeskAttach(user, request.Adding);
+        if (desk != null) return desk;
 
         return Ok(await BuildLogin(user, request.Device));
     }
@@ -242,7 +271,7 @@ public class AuthController : ControllerBase
         }
         catch (InvalidOperationException ex)
         {
-            return StatusCode(503, new { message = ex.Message });
+            return MailProblem(ex);
         }
         return Ok(new { message = "Kod emailinə göndərildi", userId = user.Id });
     }
@@ -263,7 +292,7 @@ public class AuthController : ControllerBase
         }
         catch (InvalidOperationException ex)
         {
-            return StatusCode(503, new { message = ex.Message });
+            return MailProblem(ex);
         }
         return Ok(new { message = "Kod yenidən emailinə göndərildi" });
     }
@@ -292,7 +321,7 @@ public class AuthController : ControllerBase
         _db.OtpCodes.Remove(otp);
         await _db.SaveChangesAsync();
 
-        var blocked = CheckAccount(user);
+        var blocked = await CheckAccount(user);
         if (blocked != null) return blocked;
 
         if (otp.Type == "register")
@@ -343,7 +372,7 @@ public class AuthController : ControllerBase
         {
             return NotFound(new { message = "İstifadəçi tapılmadı" });
         }
-        var blocked = CheckAccount(user);
+        var blocked = await CheckAccount(user);
         if (blocked != null) return blocked;
         if (principal.FindFirst("sst")?.Value != user.SecurityStamp)
             return BadRequest(new { message = "Şifrə kodu yanlışdır və ya vaxtı bitib" });
@@ -367,7 +396,7 @@ public class AuthController : ControllerBase
         var row = await _db.RefreshTokens.Include(t => t.User).FirstOrDefaultAsync(t => t.Token == token && !t.IsDeleted);
         if (row == null || row.IsRevoked || row.ExpiresAt <= DateTime.UtcNow)
             return Unauthorized(new { message = "Sessiya bitib" });
-        var blocked = CheckAccount(row.User);
+        var blocked = await CheckAccount(row.User);
         if (blocked != null) return blocked;
         row.IsRevoked = true;
         row.RevokedAt = DateTime.UtcNow;
@@ -454,7 +483,7 @@ public class AuthController : ControllerBase
     {
         var user = await _users.FindByIdAsync(DtoMapper.GetUserId(User).ToString());
         var role = await DtoMapper.GetRole(_users, user!);
-        return Ok(DtoMapper.MapUser(user!, role));
+        return Ok(DtoMapper.MapUser(user!, role, includePrivacy: true));
     }
 
     [Authorize]
@@ -528,6 +557,14 @@ public class AuthController : ControllerBase
             u.PhoneNumber == contact || u.PhoneNumber == phone);
     }
 
+    private static string ProviderPerson(string provider) => provider switch
+    {
+        "google" => "Google istifadəçisi",
+        "apple" => "Apple istifadəçisi",
+        "facebook" => "Facebook istifadəçisi",
+        _ => "İstifadəçi"
+    };
+
     private static string MakeUserName(string email)
     {
         var raw = email.Split('@')[0];
@@ -554,11 +591,37 @@ public class AuthController : ControllerBase
         if (rows.Count > 0) await _db.SaveChangesAsync();
     }
 
-    private IActionResult? CheckAccount(AppUser user)
+    private async Task<IActionResult?> RejectDeskAttach(AppUser user, bool adding)
+    {
+        if (!adding || !await _users.IsInRoleAsync(user, "Admin")) return null;
+        return StatusCode(403, new { message = "Admin ayrıca hesabdır. Başqa hesabın üstündən açılmır" });
+    }
+
+    private async Task<IActionResult?> CheckAccount(AppUser user)
     {
         if (!user.IsActive) return StatusCode(403, new { message = "Hesab deaktivdir" });
-        if (user.IsBanned) return StatusCode(403, new { message = "Hesab dayandırılıb" });
+        if (user.IsBanned && user.BannedUntil.HasValue && user.BannedUntil.Value <= DateTime.UtcNow)
+        {
+            user.IsBanned = false;
+            user.BannedUntil = null;
+            user.UpdatedAt = DateTime.UtcNow;
+            await _users.UpdateAsync(user);
+        }
+        if (user.IsBanned)
+        {
+            var message = user.BannedUntil.HasValue
+                ? $"Hesab {user.BannedUntil.Value:dd.MM.yyyy HH:mm} UTC tarixinədək dayandırılıb"
+                : "Hesab dayandırılıb";
+            return StatusCode(403, new { message });
+        }
         return null;
+    }
+
+    private IActionResult MailProblem(InvalidOperationException ex)
+    {
+        if (ex.Message == "Email mövcud deyil")
+            return BadRequest(new { message = ex.Message });
+        return StatusCode(503, new { message = "Kodu göndərmək alınmadı. Bir az sonra yenidən cəhd et" });
     }
 
     private async Task<string> IssueOtpAsync(AppUser user, string contact, string type)
@@ -648,7 +711,7 @@ public class AuthController : ControllerBase
             "PasswordRequiresDigit" => "Şifrədə rəqəm olmalıdır",
             "PasswordRequiresLower" => "Şifrədə kiçik hərf olmalıdır",
             "PasswordRequiresUpper" => "Şifrədə böyük hərf olmalıdır",
-            _ => result.Errors.First().Description
+            _ => "Məlumat qəbul olunmadı"
         };
     }
 
@@ -671,7 +734,7 @@ public class AuthController : ControllerBase
         {
             token = access.Token,
             refreshToken = refresh.Token,
-            user = DtoMapper.MapUser(user, role)
+            user = DtoMapper.MapUser(user, role, includePrivacy: true)
         };
     }
 

@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Text.Json;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Pulse.API.Helpers;
@@ -18,7 +19,7 @@ public static class ProviderTokenVerifier
     public static async Task<ProviderIdentity> ReadAsync(string provider, string? idToken, string? audience)
     {
         if (string.IsNullOrWhiteSpace(idToken))
-            throw new InvalidOperationException(provider == "apple" ? "Apple təsdiq tokeni lazımdır" : "Google təsdiq tokeni lazımdır");
+            throw new InvalidOperationException(provider == "apple" ? "Apple ilə daxil olmaq alınmadı" : "Google ilə daxil olmaq alınmadı");
 
         var google = provider == "google";
         var keys = await KeysAsync(google);
@@ -43,12 +44,12 @@ public static class ProviderTokenVerifier
         }
         catch
         {
-            throw new InvalidOperationException(google ? "Google tokeni yanlışdır" : "Apple tokeni yanlışdır");
+            throw new InvalidOperationException(google ? "Google ilə daxil olmaq alınmadı" : "Apple ilə daxil olmaq alınmadı");
         }
 
         var email = principal.FindFirst("email")?.Value?.Trim().ToLowerInvariant();
         if (string.IsNullOrWhiteSpace(email) || !email.Contains('@'))
-            throw new InvalidOperationException("Tokenin içində email yoxdur");
+            throw new InvalidOperationException("Bu hesabın emaili görünmür");
 
         var verified = principal.FindFirst("email_verified")?.Value;
         if (google && !string.Equals(verified, "true", StringComparison.OrdinalIgnoreCase))
@@ -56,6 +57,53 @@ public static class ProviderTokenVerifier
 
         var name = principal.FindFirst("name")?.Value;
         return new ProviderIdentity(email, string.IsNullOrWhiteSpace(name) ? null : name.Trim());
+    }
+
+    public static async Task<ProviderIdentity> ReadFacebookAsync(string? accessToken, string? appId, string? appSecret)
+    {
+        if (string.IsNullOrWhiteSpace(appId))
+            throw new InvalidOperationException("Facebook ilə daxil olmaq hazırda mümkün deyil");
+        if (string.IsNullOrWhiteSpace(accessToken))
+            throw new InvalidOperationException("Facebook ilə daxil olmaq alınmadı");
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(appSecret))
+            {
+                var debugUrl = "https://graph.facebook.com/debug_token?input_token="
+                    + Uri.EscapeDataString(accessToken)
+                    + "&access_token=" + Uri.EscapeDataString(appId + "|" + appSecret);
+                using var debugResponse = await Http.GetAsync(debugUrl);
+                if (!debugResponse.IsSuccessStatusCode)
+                    throw new InvalidOperationException("Facebook ilə daxil olmaq alınmadı");
+                using var debugDoc = JsonDocument.Parse(await debugResponse.Content.ReadAsStringAsync());
+                if (!debugDoc.RootElement.TryGetProperty("data", out var data))
+                    throw new InvalidOperationException("Facebook ilə daxil olmaq alınmadı");
+                var valid = data.TryGetProperty("is_valid", out var validNode) && validNode.ValueKind == JsonValueKind.True;
+                var app = data.TryGetProperty("app_id", out var appNode) ? appNode.GetString() : "";
+                if (!valid || !string.Equals(app, appId, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Facebook ilə daxil olmaq alınmadı");
+            }
+
+            var meUrl = "https://graph.facebook.com/me?fields=id,name,email&access_token=" + Uri.EscapeDataString(accessToken);
+            using var meResponse = await Http.GetAsync(meUrl);
+            if (!meResponse.IsSuccessStatusCode)
+                throw new InvalidOperationException("Facebook ilə daxil olmaq alınmadı");
+            using var me = JsonDocument.Parse(await meResponse.Content.ReadAsStringAsync());
+            var email = me.RootElement.TryGetProperty("email", out var emailNode) ? emailNode.GetString()?.Trim().ToLowerInvariant() : null;
+            if (string.IsNullOrWhiteSpace(email) || !email.Contains('@'))
+                throw new InvalidOperationException("Bu hesabın emaili görünmür");
+            var person = me.RootElement.TryGetProperty("name", out var nameNode) ? nameNode.GetString() : null;
+            return new ProviderIdentity(email, string.IsNullOrWhiteSpace(person) ? null : person.Trim());
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
+        }
+        catch
+        {
+            throw new InvalidOperationException("Facebook ilə daxil olmaq alınmadı");
+        }
     }
 
     private static async Task<IList<SecurityKey>> KeysAsync(bool google)
@@ -96,7 +144,7 @@ public static class ProviderTokenVerifier
         }
         catch
         {
-            throw new InvalidOperationException(google ? "Google açarları alınmadı" : "Apple açarları alınmadı");
+            throw new InvalidOperationException(google ? "Google ilə daxil olmaq alınmadı" : "Apple ilə daxil olmaq alınmadı");
         }
         finally
         {

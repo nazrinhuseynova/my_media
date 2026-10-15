@@ -13,6 +13,7 @@ public class LoginRequest
     public string Contact { get; set; } = string.Empty;
     public string Password { get; set; } = string.Empty;
     public string? Device { get; set; }
+    public bool Adding { get; set; }
 }
 
 public class OtpRequest
@@ -51,6 +52,7 @@ public class SocialLoginRequest
     public string? FullName { get; set; }
     public string? IdToken { get; set; }
     public string? Device { get; set; }
+    public bool Adding { get; set; }
 }
 
 public class RefreshRequest
