@@ -10,17 +10,49 @@ body,
   min-height: 100%;
 }
 
+html {
+  overflow-x: clip;
+}
+
 body {
   font-family: var(--font);
-  font-weight: 400;
-  letter-spacing: -0.011em;
-  font-feature-settings: "cv11" 1, "ss01" 1;
-  background: var(--bg);
+  font-weight: 500;
+  letter-spacing: -0.012em;
+  font-feature-settings: "kern" 1, "liga" 1;
+  unicode-bidi: plaintext;
+  background:
+    radial-gradient(980px 460px at 6% -10%, var(--mesh-a), transparent 62%),
+    radial-gradient(760px 400px at 96% 0%, var(--mesh-b), transparent 58%),
+    radial-gradient(700px 380px at 78% 100%, var(--mesh-c), transparent 56%),
+    radial-gradient(420px 240px at 40% 48%, color-mix(in srgb, var(--mesh-a) 40%, transparent), transparent 70%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg) 86%, #fff) 0%, var(--bg) 46%, color-mix(in srgb, var(--bg) 94%, #000) 100%);
+  background-attachment: fixed;
   color: var(--text);
-  line-height: 1.45;
+  line-height: 1.55;
   overflow-x: clip;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Intro / welcome / login — səhifə scrollbar-ı olmasın */
+html:has(.intro),
+html:has(.welcome-lang),
+html:has(.auth-wrap),
+body:has(.intro),
+body:has(.welcome-lang),
+body:has(.auth-wrap) {
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+#root:has(.intro),
+#root:has(.welcome-lang),
+#root:has(.auth-wrap) {
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
 }
 
 ::selection {
@@ -110,6 +142,18 @@ ul {
   margin: 0 auto;
   padding: 30px 20px 80px;
   min-width: 0;
+  animation: page-in 0.45s var(--ease) both;
+}
+
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .feed-page {
@@ -117,14 +161,23 @@ ul {
 }
 
 .card {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 96%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(14px) saturate(1.08);
 }
 
 .post-card {
   border-radius: var(--radius);
+  overflow: clip;
+  transition: transform 0.28s var(--ease), box-shadow 0.28s var(--ease), border-color 0.28s var(--ease);
+}
+
+.post-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  box-shadow: var(--shadow-sm), 0 16px 36px color-mix(in srgb, var(--accent) 10%, transparent);
+  transform: translateY(-1px);
 }
 
 .muted {
@@ -156,9 +209,57 @@ ul {
   width: 22px;
   height: 22px;
   border: 2px solid var(--border);
-  border-top-color: var(--text);
+  border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
+}
+
+.loading-dots {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 8px 0;
+}
+
+.loading-dots span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.35;
+  animation: loading-bounce 0.9s ease-in-out infinite;
+}
+
+.loading-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.loading-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes loading-bounce {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.3;
+  }
+  40% {
+    transform: translateY(-7px);
+    opacity: 1;
+  }
+}
+
+html[data-motion="reduce"] .loading-dots span {
+  animation: none;
+  opacity: 0.7;
+}
+
+html[data-contrast="high"] {
+  --border: color-mix(in srgb, var(--text) 35%, var(--border));
 }
 
 @keyframes spin {
