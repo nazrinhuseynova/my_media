@@ -21,7 +21,7 @@ export default function StoryBar() {
 
   return (
     <>
-      <div className="story-row">
+      <div className="story-row" data-tour="stories">
         <div className="story-own">
           <button className="story-item" onClick={() => (mine ? setActiveIndex(0) : setStoryOpen(true))}>
             <div className={`story-ring ${mine?.seen ? "seen" : ""}`}>

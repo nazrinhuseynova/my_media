@@ -5,8 +5,7 @@ import { api } from "../../../services/api";
 import { uploadFile, MUSIC_TRACKS } from "../../../utils/upload";
 import { useStoryStore } from "../store/useStoryStore";
 import { notify } from "../../../stores/useNoticeStore";
-
-const MARKS = ["🔥", "❤️", "📍", "😂", "✨", "🌊"];
+import ExpressionPicker from "../../expression/ExpressionPicker";
 
 export default function StoryUploader() {
   const open = useAppStore((s) => s.storyOpen);
@@ -20,6 +19,7 @@ export default function StoryUploader() {
   const [text, setText] = useState("");
   const [sticker, setSticker] = useState("");
   const [music, setMusic] = useState("");
+  const [place, setPlace] = useState("");
   const [audience, setAudience] = useState("all");
   const [panel, setPanel] = useState("");
   const [busy, setBusy] = useState(false);
@@ -37,6 +37,7 @@ export default function StoryUploader() {
     setText("");
     setSticker("");
     setMusic("");
+    setPlace("");
     setPanel("");
     setBusy(false);
     setError("");
@@ -70,10 +71,11 @@ export default function StoryUploader() {
       const kind = file.type.startsWith("video") ? "video" : "image";
       const uploaded = await uploadFile(file, kind);
       const track = MUSIC_TRACKS.find((t) => t.name === music);
+      const caption = [text, place ? `⌖ ${place}` : ""].filter(Boolean).join(" · ");
       await api.post("/api/stories", {
         mediaUrl: uploaded.url,
         mediaExtension: uploaded.extension,
-        text,
+        text: caption,
         sticker,
         music: track ? `${track.name}||${track.url}` : music,
         mediaType: kind,
@@ -158,6 +160,7 @@ export default function StoryUploader() {
             {text ? <p className="moment-caption">{text}</p> : null}
             {sticker ? <span className="moment-mark">{sticker}</span> : null}
             {music ? <span className="moment-track">♪ {music}</span> : null}
+            {place ? <span className="moment-track">⌖ {place}</span> : null}
           </div>
         )}
 
@@ -167,11 +170,8 @@ export default function StoryUploader() {
               <button type="button" className={panel === "text" ? "is-on" : ""} onClick={() => { setPanel("text"); textRef.current?.focus(); }}>
                 Yazı
               </button>
-              <button type="button" className={panel === "mark" ? "is-on" : ""} onClick={() => setPanel(panel === "mark" ? "" : "mark")}>
-                Nişan
-              </button>
-              <button type="button" className={panel === "sound" ? "is-on" : ""} onClick={() => setPanel(panel === "sound" ? "" : "sound")}>
-                Səs
+              <button type="button" className={panel === "express" ? "is-on" : ""} onClick={() => setPanel(panel === "express" ? "" : "express")}>
+                Emoji / Stiker / Musiqi / Məkan
               </button>
               <button type="button" className={audience === "close" ? "is-on" : ""} onClick={() => setAudience(audience === "close" ? "all" : "close")}>
                 {audience === "close" ? "Yaxın çevrə" : "Hamı"}
@@ -187,26 +187,19 @@ export default function StoryUploader() {
                 onChange={(e) => setText(e.target.value)}
               />
             ) : null}
-            {panel === "mark" ? (
-              <div className="moment-marks">
-                {MARKS.map((s) => (
-                  <button key={s} type="button" className={sticker === s ? "is-on" : ""} onClick={() => setSticker(sticker === s ? "" : s)}>
-                    {s}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            {panel === "sound" ? (
-              <div className="moment-sounds">
-                <button type="button" className={!music ? "is-on" : ""} onClick={() => setMusic("")}>
-                  Səssiz
-                </button>
-                {MUSIC_TRACKS.map((m) => (
-                  <button key={m.name} type="button" className={music === m.name ? "is-on" : ""} onClick={() => setMusic(m.name)}>
-                    {m.name}
-                  </button>
-                ))}
-              </div>
+            {panel === "express" ? (
+              <ExpressionPicker
+                onPick={(payload) => {
+                  if (payload.kind === "emoji" || payload.kind === "sticker") {
+                    setSticker(payload.text);
+                  } else if (payload.kind === "music") {
+                    const name = payload.meta?.title || payload.text.split(" — ")[0];
+                    setMusic(name);
+                  } else if (payload.kind === "location") {
+                    setPlace(payload.text);
+                  }
+                }}
+              />
             ) : null}
           </>
         ) : (

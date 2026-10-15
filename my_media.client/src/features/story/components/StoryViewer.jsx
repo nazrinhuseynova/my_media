@@ -138,14 +138,34 @@ export default function StoryViewer({ groups, startIndex, onClose }) {
             <img className="avatar story-head-avatar" src={group.user.avatar} alt="" />
             <strong>{group.user.username}</strong>
           </div>
-          <button
-            type="button"
-            onPointerDown={(e) => e.stopPropagation()}
-            onPointerUp={(e) => e.stopPropagation()}
-            onClick={onClose}
-          >
-            ✕
-          </button>
+          <div className="row" style={{ gap: 8 }}>
+            {group.user.id !== me?.id ? (
+              <button
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onPointerUp={(e) => e.stopPropagation()}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  try {
+                    await api.post("/api/reports", { targetType: "story", targetId: story.id, reason: "Uyğunsuz hekayə" });
+                    setNote("Şikayət göndərildi");
+                  } catch (err) {
+                    setNote(err?.response?.data?.message || "Şikayət göndərilmədi");
+                  }
+                }}
+              >
+                Şikayət
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerUp={(e) => e.stopPropagation()}
+              onClick={onClose}
+            >
+              ✕
+            </button>
+          </div>
         </div>
         <form className="story-reply" onSubmit={async (e) => {
           e.preventDefault();
