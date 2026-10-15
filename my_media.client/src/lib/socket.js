@@ -7,6 +7,7 @@ let chatHub;
 let noteHub;
 let chatReady = Promise.resolve();
 let noteReady = Promise.resolve();
+let heartbeatTimer = 0;
 
 export function onSocket(event, handler) {
   listeners[event] = listeners[event] || [];
@@ -39,7 +40,15 @@ export function connectSocket() {
     chatHub.on("messageDeleted", (p) => fire("messageDeleted", p));
     chatHub.on("messagesRead", (p) => fire("messagesRead", p));
     chatHub.on("typing", (p) => fire("typing", p));
-    chatReady = chatHub.start().catch(() => {});
+    chatHub.on("presence", (p) => fire("presence", p));
+    chatReady = chatHub.start().then(() => {
+      if (heartbeatTimer) window.clearInterval(heartbeatTimer);
+      heartbeatTimer = window.setInterval(() => {
+        if (chatHub?.state === signalR.HubConnectionState.Connected) {
+          chatHub.invoke("Heartbeat").catch(() => {});
+        }
+      }, 25000);
+    }).catch(() => {});
   }
 
   if (!noteHub || noteHub.state === signalR.HubConnectionState.Disconnected) {
@@ -68,6 +77,10 @@ export function connectSocket() {
       }
     },
     disconnect() {
+      if (heartbeatTimer) {
+        window.clearInterval(heartbeatTimer);
+        heartbeatTimer = 0;
+      }
       chatHub?.stop();
       noteHub?.stop();
       chatHub = null;
