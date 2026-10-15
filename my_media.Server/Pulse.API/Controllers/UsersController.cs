@@ -15,6 +15,12 @@ namespace Pulse.API.Controllers;
 [Authorize]
 public class UsersController : ControllerBase
 {
+    private static readonly string[] Languages =
+    [
+        "az", "en", "tr", "ru", "de", "fr", "es", "it", "pt", "uk",
+        "pl", "nl", "sv", "el", "ar", "fa", "hi", "zh-CN", "ja", "ko"
+    ];
+
     private readonly AppDbContext _db;
     private readonly UserManager<AppUser> _users;
     private readonly INotificationService _notes;
@@ -32,7 +38,7 @@ public class UsersController : ControllerBase
     public async Task<IActionResult> Get(string username, [FromQuery] int page = 1, [FromQuery] int pageSize = 12)
     {
         var user = await _users.Users.FirstOrDefaultAsync(u => u.UserName == username);
-        if (user == null) return NotFound(new { message = "Istifadeci tapilmadi" });
+        if (user == null || await _users.IsInRoleAsync(user, "Admin")) return NotFound(new { message = "Istifadeci tapilmadi" });
         Guid? me = User.Identity?.IsAuthenticated == true ? DtoMapper.GetUserId(User) : null;
         if ((user.IsBanned || !user.IsActive) && me != user.Id)
             return NotFound(new { message = "Istifadeci tapilmadi" });
@@ -230,6 +236,55 @@ public class UsersController : ControllerBase
             if (!user.ProfileViewHistory)
                 await _db.ProfileViews.Where(v => v.ViewerId == user.Id).ExecuteDeleteAsync();
         }
+        if (body.ShowActivityStatus != null) user.ShowActivityStatus = PrivacyRules.NormalizeCircle(body.ShowActivityStatus);
+        if (body.WhoCanMessage != null) user.WhoCanMessage = PrivacyRules.NormalizeCircle(body.WhoCanMessage);
+        if (body.WhoCanTag != null) user.WhoCanTag = PrivacyRules.NormalizeCircle(body.WhoCanTag);
+        if (body.WhoCanMention != null) user.WhoCanMention = PrivacyRules.NormalizeCircle(body.WhoCanMention);
+        if (body.ReadReceipts.HasValue) user.ReadReceipts = body.ReadReceipts.Value;
+        if (body.AllowStoryReplies.HasValue) user.AllowStoryReplies = body.AllowStoryReplies.Value;
+        if (body.AllowStorySharing.HasValue) user.AllowStorySharing = body.AllowStorySharing.Value;
+        user.UpdatedAt = DateTime.UtcNow;
+        await _users.UpdateAsync(user);
+        var role = await DtoMapper.GetRole(_users, user);
+        return Ok(DtoMapper.MapUser(user, role, includePrivacy: true));
+    }
+
+    [HttpPatch("/api/profile/note")]
+    public async Task<IActionResult> SetNote([FromBody] NoteBody body)
+    {
+        var user = await _users.FindByIdAsync(DtoMapper.GetUserId(User).ToString());
+        if (user == null) return Unauthorized();
+        var text = (body.Text ?? "").Trim();
+        if (text.Length == 0)
+        {
+            user.NoteText = null;
+            user.NoteKind = "text";
+            user.NoteAt = null;
+        }
+        else
+        {
+            if (text.Length > 60) text = text[..60];
+            var kind = (body.Kind ?? "text").Trim().ToLowerInvariant();
+            if (kind is not ("text" or "music" or "location" or "emoji")) kind = "text";
+            user.NoteText = text;
+            user.NoteKind = kind;
+            user.NoteAt = DateTime.UtcNow;
+        }
+        user.UpdatedAt = DateTime.UtcNow;
+        await _users.UpdateAsync(user);
+        var role = await DtoMapper.GetRole(_users, user);
+        return Ok(DtoMapper.MapUser(user, role, includePrivacy: true));
+    }
+
+    [HttpPatch("/api/profile/language")]
+    public async Task<IActionResult> SetLanguage([FromBody] LanguageBody body)
+    {
+        var code = (body.Language ?? "").Trim();
+        var match = Languages.FirstOrDefault(item => item.Equals(code, StringComparison.OrdinalIgnoreCase));
+        if (match == null) return BadRequest(new { message = "Bu dil seçilə bilməz" });
+        var user = await _users.FindByIdAsync(DtoMapper.GetUserId(User).ToString());
+        if (user == null) return Unauthorized();
+        user.Language = match;
         user.UpdatedAt = DateTime.UtcNow;
         await _users.UpdateAsync(user);
         var role = await DtoMapper.GetRole(_users, user);
@@ -331,7 +386,8 @@ public class UsersController : ControllerBase
         following.Add(me);
         var blocked = await _db.Blocks.Where(b => b.BlockerId == me).Select(b => b.BlockedId).ToListAsync();
         blocked.AddRange(await _db.Blocks.Where(b => b.BlockedId == me).Select(b => b.BlockerId).ToListAsync());
-        var people = await _users.Users.Where(u => !following.Contains(u.Id) && !blocked.Contains(u.Id) && u.IsActive && !u.IsBanned).Take(8).ToListAsync();
+        var adminIds = (await _users.GetUsersInRoleAsync("Admin")).Select(a => a.Id).ToList();
+        var people = await _users.Users.Where(u => !adminIds.Contains(u.Id) && !following.Contains(u.Id) && !blocked.Contains(u.Id) && u.IsActive && !u.IsBanned).Take(8).ToListAsync();
         return Ok(people.Select(u => DtoMapper.MapUser(u)));
     }
 
@@ -382,6 +438,11 @@ public class UsersController : ControllerBase
     }
 }
 
+public class LanguageBody
+{
+    public string? Language { get; set; }
+}
+
 public class ProfileBody
 {
     public string? FullName { get; set; }
@@ -392,4 +453,17 @@ public class ProfileBody
     public string? AvatarExtension { get; set; }
     public bool? IsPrivate { get; set; }
     public bool? ProfileViewHistory { get; set; }
+    public string? ShowActivityStatus { get; set; }
+    public string? WhoCanMessage { get; set; }
+    public string? WhoCanTag { get; set; }
+    public string? WhoCanMention { get; set; }
+    public bool? ReadReceipts { get; set; }
+    public bool? AllowStoryReplies { get; set; }
+    public bool? AllowStorySharing { get; set; }
+}
+
+public class NoteBody
+{
+    public string? Text { get; set; }
+    public string? Kind { get; set; }
 }
