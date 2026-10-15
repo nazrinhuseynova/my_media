@@ -47,7 +47,7 @@ public class CloudinaryFileStorageService : IFileStorageService
         var comma = dataUrl.IndexOf(',');
         if (comma < 0)
         {
-            throw new InvalidOperationException("Fayl formati yanlisdir");
+            throw new InvalidOperationException("Bu fayl uyğun deyil");
         }
 
         var meta = dataUrl[..comma];
@@ -56,7 +56,7 @@ public class CloudinaryFileStorageService : IFileStorageService
         var extension = ExtensionFromContentType(mime);
         if (string.IsNullOrEmpty(extension))
         {
-            throw new InvalidOperationException("Fayl uzantisi taninmadi");
+            throw new InvalidOperationException("Bu fayl uyğun deyil");
         }
 
         var bytes = Convert.FromBase64String(payload);
@@ -79,13 +79,13 @@ public class CloudinaryFileStorageService : IFileStorageService
     {
         if (file == null || file.Length == 0)
         {
-            throw new InvalidOperationException("Fayl bosdur");
+            throw new InvalidOperationException("Fayl boşdur");
         }
 
         var extension = ResolveExtension(file);
         if (!Allowed[kind].Contains(extension))
         {
-            throw new InvalidOperationException("Bu fayl uzantisina icaze yoxdur");
+            throw new InvalidOperationException("Bu fayl növünə icazə yoxdur");
         }
 
         await using var stream = file.OpenReadStream();
@@ -117,13 +117,13 @@ public class CloudinaryFileStorageService : IFileStorageService
 
         if (result.Error != null)
         {
-            throw new InvalidOperationException(result.Error.Message);
+            throw new InvalidOperationException("Fayl yüklənmədi");
         }
 
         var url = result.SecureUrl?.ToString();
         if (string.IsNullOrWhiteSpace(url))
         {
-            throw new InvalidOperationException("Cloudinary fayli saxlamadi");
+            throw new InvalidOperationException("Fayl yüklənmədi");
         }
 
         var storedExtension = FileNames.Normalize(result.Format);
@@ -149,7 +149,7 @@ public class CloudinaryFileStorageService : IFileStorageService
             || cloud.Equals("local", StringComparison.OrdinalIgnoreCase)
             || key.Equals("local-dev", StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("Cloudinary ayarlari tapilmadi");
+            throw new InvalidOperationException("Fayl yüklənmədi");
         }
 
         _cloudinary = new Cloudinary(new Account(cloud, key, secret));
@@ -167,7 +167,7 @@ public class CloudinaryFileStorageService : IFileStorageService
 
         if (string.IsNullOrEmpty(extension))
         {
-            throw new InvalidOperationException("Fayl uzantisi taninmadi");
+            throw new InvalidOperationException("Bu fayl uyğun deyil");
         }
 
         return extension;

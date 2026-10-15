@@ -28,6 +28,6 @@ public static class StoredMedia
             return (url, FileNames.Normalize(extension, url));
         }
 
-        throw new InvalidOperationException("Fayl Cloudinary-e yuklenmelidir");
+        throw new InvalidOperationException("Fayl yüklənmədi");
     }
 }
