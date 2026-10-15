@@ -10,6 +10,9 @@ import { formatDate } from "../../../utils/formatDate";
 import { onSocket, connectSocket } from "../../../lib/socket";
 import { uploadFile } from "../../../utils/upload";
 import { notify } from "../../../stores/useNoticeStore";
+import ChatPeopleRail from "../../../features/chat/components/ChatPeopleRail";
+import VoiceNotePlayer from "../../../features/chat/components/VoiceNotePlayer";
+import { ExpressionButton, insertAtCursor } from "../../../features/expression/ExpressionPicker";
 
 async function resolveUsernames(raw) {
   const names = String(raw || "")
@@ -54,6 +57,7 @@ export default function DirectPage() {
   const recRef = useRef(null);
   const streamRef = useRef(null);
   const bottomRef = useRef();
+  const textRef = useRef(null);
 
   useEffect(() => {
     loadConversations();
@@ -66,6 +70,15 @@ export default function DirectPage() {
       .catch(() => setFollowing([]));
   }, [me?.username]);
 
+  const [presence, setPresence] = useState({});
+
+  useEffect(() => {
+    return onSocket("presence", (p) => {
+      if (!p?.userId) return;
+      setPresence((map) => ({ ...map, [String(p.userId)]: Boolean(p.online) }));
+    });
+  }, []);
+
   const people = useMemo(() => {
     const map = new Map();
     for (const conv of conversations) {
@@ -73,9 +86,10 @@ export default function DirectPage() {
         if (!member?.id || String(member.id) === String(me?.id)) continue;
         const prev = map.get(member.id);
         const directId = conv.isGroup ? prev?.convId || null : conv.id;
+        const live = presence[String(member.id)];
         map.set(member.id, {
           ...member,
-          isOnline: Boolean(member.isOnline || prev?.isOnline),
+          isOnline: typeof live === "boolean" ? live : Boolean(member.isOnline),
           convId: directId,
         });
       }
@@ -83,14 +97,35 @@ export default function DirectPage() {
     for (const person of following) {
       if (!person?.id || String(person.id) === String(me?.id)) continue;
       const prev = map.get(person.id);
+      const live = presence[String(person.id)];
+      const online = typeof live === "boolean" ? live : Boolean(person.isOnline || prev?.isOnline);
       if (prev) {
-        map.set(person.id, { ...prev, isOnline: Boolean(person.isOnline || prev.isOnline) });
+        map.set(person.id, { ...prev, isOnline: online });
       } else {
-        map.set(person.id, { ...person, isOnline: Boolean(person.isOnline), convId: null });
+        map.set(person.id, { ...person, isOnline: online, convId: null });
       }
     }
     return [...map.values()].sort((a, b) => Number(b.isOnline) - Number(a.isOnline));
-  }, [conversations, following, me?.id]);
+  }, [conversations, following, me?.id, presence]);
+
+  const railPeople = useMemo(() => {
+    const online = people.filter((p) => p.isOnline);
+    return (online.length ? online : people).slice(0, 24);
+  }, [people]);
+
+  async function setMyNote(text, kind) {
+    try {
+      const next = await api.patch("/api/profile/note", {
+        text: (text || "").trim(),
+        kind: kind || "text",
+      });
+      useAuthStore.getState().setUser(next);
+      notify((text || "").trim() ? "Durum yeniləndi" : "Durum silindi");
+    } catch (err) {
+      notify(err.response?.data?.message || "Durum saxlanmadı", true);
+      throw err;
+    }
+  }
 
   async function openPerson(person) {
     if (person.convId) {
@@ -246,7 +281,7 @@ export default function DirectPage() {
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      setError("Bu brauzer səs yazmağı dəstəkləmir");
+      setError("Bu cihazda səs yazmaq olmur");
       return;
     }
     setError("");
@@ -324,18 +359,13 @@ export default function DirectPage() {
     <div className="page direct-page stage-lock">
       <div className={`chat-layout${id ? " has-thread" : ""}`}>
         <aside className="chat-list">
-          {people.length ? (
-            <div className="chat-people" aria-label="Aktiv və izlədiklərin">
-              {people.map((person) => (
-                <button key={person.id} type="button" className="chat-person" onClick={() => openPerson(person)}>
-                  <span className="chat-person-face">
-                    <Avatar src={person.avatar} alt={person.fullName || person.username} />
-                    {person.isOnline ? <span className="chat-person-dot" aria-label="Aktiv" /> : null}
-                  </span>
-                  <span>{person.username}</span>
-                </button>
-              ))}
-            </div>
+          {railPeople.length || me ? (
+            <ChatPeopleRail
+              people={railPeople}
+              me={me}
+              onOpen={openPerson}
+              onSetNote={setMyNote}
+            />
           ) : null}
           <div className="chat-list-head">
             <h3>Mesajlar</h3>
@@ -388,50 +418,90 @@ export default function DirectPage() {
                 ) : null}
                 {messages.map((m) => {
                   const mine = m.senderId === me.id;
-                  const status = m.readBy?.length > 1 ? "oxundu" : "göndərildi";
+                  const read = mine && (m.readBy?.length || 0) > 1;
+                  const mediaOnly = !m.deleted && ["image", "video"].includes(m.type);
+                  const hideCaption = m.deleted || ["location", "music", "status", "audio"].includes(m.type);
                   return (
-                    <div key={m.id} className={`msg-row${mine ? " me" : ""}`}>
-                      {mine ? (
-                        <span className="msg-side">{formatDate(m.createdAt)} · {status}{m.edited ? " · düzəldildi" : ""}</span>
-                      ) : null}
-                      <div className={`bubble${mine ? " me" : ""}`}>
-                        {active?.isGroup ? <div className="bubble-name">{m.sender?.username}</div> : null}
-                        {!m.deleted && m.replyText ? (
-                          <div className="msg-quote">
-                            <strong>{m.replyUser || "Mesaj"}</strong>
-                            <span>{m.replyText}</span>
-                          </div>
-                        ) : null}
-                        {!m.deleted && m.type === "image" ? <img src={m.mediaUrl} alt="" /> : null}
-                        {!m.deleted && m.type === "video" ? <video src={m.mediaUrl} controls /> : null}
-                        {!m.deleted && m.type === "audio" ? <audio src={m.mediaUrl} controls /> : null}
-                        {!m.deleted && m.type === "post" && m.sharedPostId ? <Link to={`/p/${m.sharedPostId}`}>Paylaşıma bax</Link> : null}
-                        {!m.deleted && m.type === "reel" && m.sharedPostId ? <Link to={`/reels?v=${m.sharedPostId}`}>Videoya bax</Link> : null}
-                        {m.text ? <div className="msg-text">{m.text}</div> : null}
-                        <button type="button" className="msg-more" aria-label="Mesaj əməliyyatları" onClick={(e) => {
-                          if (menuId === m.id) {
-                            setMenuId("");
-                            return;
-                          }
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setMenuBox({ top: rect.bottom + 6, left: Math.max(8, Math.min(rect.left, window.innerWidth - 196)) });
-                          setMenuId(m.id);
-                        }}>
-                          <span className="msg-dots" aria-hidden="true"><i /><i /><i /></span>
-                        </button>
-                        {menuId === m.id ? (
-                          <div className="msg-menu" role="menu" style={menuBox || undefined}>
-                            {!m.deleted ? <button type="button" onClick={() => { setReply(m); setEditing(null); setMenuId(""); }}>Yanıtla</button> : null}
-                            {!m.deleted && m.text ? <button type="button" onClick={() => copyMessage(m)}>Kopyala</button> : null}
-                            {!m.deleted ? <button type="button" onClick={() => { setForwardMsg(m); setMenuId(""); }}>İlet</button> : null}
-                            {mine && !m.deleted && m.type === "text" ? <button type="button" onClick={() => { setEditing(m); setReply(null); setText(m.text || ""); setMenuId(""); }}>Düzəlt</button> : null}
-                            {mine && !m.deleted ? <button type="button" onClick={() => unsend(m)}>Göndərimi geri al</button> : null}
-                            <button type="button" onClick={() => hideForMe(m)}>Özün üçün sil</button>
-                            {mine && !m.deleted ? <button type="button" onClick={() => unsend(m)}>Sil</button> : null}
-                          </div>
-                        ) : null}
+                    <div
+                      key={m.id}
+                      className={`msg-row${mine ? " me" : ""}${m.deleted ? " is-deleted" : ""}`}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setMenuBox({ top: e.clientY, left: Math.max(8, Math.min(e.clientX, window.innerWidth - 196)) });
+                        setMenuId(m.id);
+                      }}
+                    >
+                      <div className={`msg-stack${mine ? " me" : ""}`}>
+                        <div className={`bubble${mine ? " me" : ""}${mediaOnly ? " is-media" : ""}${m.deleted ? " is-deleted" : ""}`}>
+                          {active?.isGroup && !mine ? <div className="bubble-name">{m.sender?.username}</div> : null}
+                          {!m.deleted && m.replyText ? (
+                            <div className="msg-quote">
+                              <strong>{m.replyUser || "Mesaj"}</strong>
+                              <span>{m.replyText}</span>
+                            </div>
+                          ) : null}
+                          {m.deleted ? (
+                            <div className="msg-text msg-deleted">Mesaj silindi</div>
+                          ) : null}
+                          {!m.deleted && m.type === "image" ? <img src={m.mediaUrl} alt="" /> : null}
+                          {!m.deleted && m.type === "video" ? <video src={m.mediaUrl} controls playsInline /> : null}
+                          {!m.deleted && m.type === "audio" ? <VoiceNotePlayer src={m.mediaUrl} mine={mine} /> : null}
+                          {!m.deleted && m.type === "post" && m.sharedPostId ? (
+                            <Link className="msg-card-link" to={`/p/${m.sharedPostId}`}>
+                              <strong>Paylaşım</strong>
+                              <span>Posta bax</span>
+                            </Link>
+                          ) : null}
+                          {!m.deleted && m.type === "reel" && m.sharedPostId ? (
+                            <Link className="msg-card-link" to={`/reels?v=${m.sharedPostId}`}>
+                              <strong>Reel</strong>
+                              <span>Videoya bax</span>
+                            </Link>
+                          ) : null}
+                          {!m.deleted && m.type === "location" ? (
+                            <div className="msg-share"><span className="msg-share-ico">⌖</span><div><strong>Məkan</strong><span>{m.text}</span></div></div>
+                          ) : null}
+                          {!m.deleted && m.type === "music" ? (
+                            <div className="msg-share"><span className="msg-share-ico">♫</span><div><strong>Musiqi</strong><span>{m.text}</span></div></div>
+                          ) : null}
+                          {!m.deleted && m.type === "status" ? (
+                            <div className="msg-share"><span className="msg-share-ico">💬</span><div><strong>Durum</strong><span>{m.text}</span></div></div>
+                          ) : null}
+                          {!hideCaption && m.text ? <div className="msg-text">{m.text}</div> : null}
+                          <button
+                            type="button"
+                            className="msg-more"
+                            aria-label="Mesaj əməliyyatları"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (menuId === m.id) {
+                                setMenuId("");
+                                return;
+                              }
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              setMenuBox({ top: rect.bottom + 4, left: Math.max(8, Math.min(rect.left - 140, window.innerWidth - 196)) });
+                              setMenuId(m.id);
+                            }}
+                          >
+                            ···
+                          </button>
+                        </div>
+                        <div className={`msg-meta${mine ? " me" : ""}`}>
+                          <span>{formatDate(m.createdAt)}</span>
+                          {m.edited ? <span>düzəldildi</span> : null}
+                          {mine ? <span className={`msg-ticks${read ? " is-read" : ""}`} aria-label={read ? "Oxundu" : "Göndərildi"}>✓{read ? "✓" : ""}</span> : null}
+                        </div>
                       </div>
-                      {!mine ? <span className="msg-side">{formatDate(m.createdAt)}{m.edited ? " · düzəldildi" : ""}</span> : null}
+                      {menuId === m.id ? (
+                        <div className="msg-menu" role="menu" style={menuBox || undefined}>
+                          {!m.deleted ? <button type="button" onClick={() => { setReply(m); setEditing(null); setMenuId(""); }}>Yanıtla</button> : null}
+                          {!m.deleted && m.text ? <button type="button" onClick={() => copyMessage(m)}>Kopyala</button> : null}
+                          {!m.deleted ? <button type="button" onClick={() => { setForwardMsg(m); setMenuId(""); }}>İlet</button> : null}
+                          {mine && !m.deleted && m.type === "text" ? <button type="button" onClick={() => { setEditing(m); setReply(null); setText(m.text || ""); setMenuId(""); }}>Düzəlt</button> : null}
+                          <button type="button" onClick={() => hideForMe(m)}>Özün üçün sil</button>
+                          {mine && !m.deleted ? <button type="button" onClick={() => unsend(m)}>Geri al</button> : null}
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })}
@@ -451,7 +521,23 @@ export default function DirectPage() {
                 </div>
               ) : null}
               <form className="chat-composer" onSubmit={submit}>
+                <ExpressionButton
+                  className="chat-expr"
+                  onPick={async (payload) => {
+                    if (payload.kind === "emoji" || payload.kind === "sticker") {
+                      insertAtCursor(textRef, payload.text, text, setText);
+                      return;
+                    }
+                    try {
+                      await send({ type: payload.kind === "music" ? "music" : "location", text: payload.text });
+                      loadConversations();
+                    } catch (err) {
+                      setError(err.response?.data?.message || "Göndərilmədi");
+                    }
+                  }}
+                />
                 <input
+                  ref={textRef}
                   value={text}
                   onChange={(e) => {
                     setText(e.target.value);
