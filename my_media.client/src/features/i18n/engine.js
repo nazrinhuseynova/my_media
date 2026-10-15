@@ -30,7 +30,11 @@ function loadCache() {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
-    return parsed && typeof parsed === "object" ? parsed : {};
+    if (!parsed || typeof parsed !== "object") return {};
+    Object.keys(parsed).forEach((key) => {
+      if (key.endsWith("\nPulse")) delete parsed[key];
+    });
+    return parsed;
   } catch {
     return {};
   }
@@ -43,6 +47,8 @@ function persist() {
     return;
   }
 }
+
+persist();
 
 function pairKey(lang, text) {
   return lang + "\n" + text;
@@ -99,6 +105,7 @@ function rememberAttr(el, attr, value) {
 }
 
 function paint(source) {
+  if (source === "Pulse") return "Pulse";
   if (target === SOURCE) return source;
   return memory[pairKey(target, source)] || "";
 }
@@ -113,7 +120,7 @@ function visitText(node) {
   const lead = (raw.match(/^\s*/) || [""])[0];
   const tail = (raw.match(/\s*$/) || [""])[0];
   const core = raw.slice(lead.length, raw.length - tail.length).replace(/\s+/g, " ").trim();
-  if (!meaningful(core)) return;
+  if (core === "Pulse" || !meaningful(core)) return;
   const source = rememberText(node, core);
   const translated = paint(source);
   if (translated) {
@@ -189,7 +196,7 @@ async function request(parts, lang) {
     }
     return [translated.join(" ")];
   }
-  const payload = parts.join("\n");
+  const payload = parts.map((part) => part.replaceAll("Pulse", "000PULSE000")).join("\n");
   if (parts.length > 1 && bytes(payload) > 420) {
     const mid = Math.ceil(parts.length / 2);
     const left = await request(parts.slice(0, mid), lang);
@@ -209,7 +216,7 @@ async function request(parts, lang) {
       return null;
     }
     if (/INVALID LANGUAGE PAIR/i.test(text) || data?.responseStatus === 400) return parts.map(() => "");
-    const lines = String(text).split("\n");
+    const lines = String(text).split("\n").map((line) => line.replaceAll("000PULSE000", "Pulse"));
     if (lines.length !== parts.length) {
       if (parts.length === 1) return null;
       const mid = Math.ceil(parts.length / 2);
@@ -294,6 +301,16 @@ export function currentLanguage() {
   return target;
 }
 
+export function syncAccountLanguage(code) {
+  if (!code || !LANGUAGE_CODES.includes(code)) return false;
+  if (code === target) {
+    try { localStorage.setItem(KEY, code); } catch { return false; }
+    return false;
+  }
+  try { localStorage.setItem(KEY, code); } catch { return false; }
+  return true;
+}
+
 export function boot() {
   document.documentElement.lang = target;
   if (target === SOURCE || !document.body) return;
@@ -317,6 +334,10 @@ export function chooseLanguage(code) {
   }
   document.documentElement.lang = next;
   if (next === SOURCE) {
+    try {
+      sessionStorage.setItem("pulse_keep", "1");
+      sessionStorage.setItem("pulse_skip_intro", "1");
+    } catch { /* sessiyanı saxla */ }
     window.location.reload();
     return new Promise(() => {});
   }
