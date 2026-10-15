@@ -11,6 +11,7 @@ export default function ResetPasswordPage() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
   async function submit(e) {
     e.preventDefault();
@@ -27,11 +28,16 @@ export default function ResetPasswordPage() {
       setError("Open this page from the code screen");
       return;
     }
+    setBusy(true);
+    setError("");
     try {
       await authApi.reset({ resetToken: loc.state.resetToken, password });
-      navigate("/login");
+      navigate("/login", { replace: true });
     } catch (err) {
-      setError(guestMessage(err, "Couldn't update the password"));
+      const message = guestMessage(err, "Couldn't update the password");
+      if (message) setError(message);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -40,9 +46,28 @@ export default function ResetPasswordPage() {
       <div className="card auth-card">
         <h1>New password</h1>
         <form onSubmit={submit}>
-          <Input type="password" label="New password" value={password} onChange={(e) => setPassword(e.target.value)} />
-          <Input type="password" label="Repeat password" value={confirm} onChange={(e) => setConfirm(e.target.value)} error={error} />
-          <Button type="submit">Save</Button>
+          <Input
+            type="password"
+            label="New password"
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              if (error) setError("");
+            }}
+            autoComplete="new-password"
+          />
+          <Input
+            type="password"
+            label="Repeat password"
+            value={confirm}
+            onChange={(e) => {
+              setConfirm(e.target.value);
+              if (error) setError("");
+            }}
+            error={error}
+            autoComplete="new-password"
+          />
+          <Button disabled={busy} type="submit">{busy ? "Please wait..." : "Save"}</Button>
         </form>
       </div>
     </div>

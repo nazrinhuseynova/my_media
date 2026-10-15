@@ -34,6 +34,7 @@ const AUTH_OPEN = [
   "/api/auth/resend-otp",
   "/api/auth/refresh",
   "/api/auth/logout",
+  "/api/auth/providers",
 ];
 
 http.interceptors.request.use((config) => {

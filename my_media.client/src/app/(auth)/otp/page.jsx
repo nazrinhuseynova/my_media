@@ -50,7 +50,8 @@ export default function OtpPage() {
       setUser(data.user);
       await openHome(data.user, navigate);
     } catch (err) {
-      setError(guestMessage(err, "That code is wrong or expired"));
+      const message = guestMessage(err, "That code is wrong or expired");
+      if (message) setError(message);
     } finally {
       setBusy(false);
     }
@@ -66,7 +67,8 @@ export default function OtpPage() {
       });
       setSeconds(60);
     } catch (err) {
-      setError(guestMessage(err, "Couldn't send the code"));
+      const message = guestMessage(err, "Couldn't send the code");
+      if (message) setError(message);
     }
   }
 
@@ -84,7 +86,18 @@ export default function OtpPage() {
             : "Didn't get the code? Send it again"}
         </p>
         <form onSubmit={submit}>
-          <Input value={code} onChange={(e) => setCode(e.target.value)} label="6-digit code" maxLength={6} error={error} />
+          <Input
+            value={code}
+            onChange={(e) => {
+              setCode(e.target.value);
+              if (error) setError("");
+            }}
+            label="6-digit code"
+            maxLength={6}
+            error={error}
+            inputMode="numeric"
+            autoComplete="one-time-code"
+          />
           <Button disabled={busy} type="submit">{busy ? "Please wait..." : "Confirm"}</Button>
         </form>
         <Button variant="ghost" type="button" disabled={seconds > 0} onClick={resend}>Send code again</Button>

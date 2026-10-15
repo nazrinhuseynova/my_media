@@ -29,6 +29,8 @@ export default function RegisterPage() {
 
   function change(e) {
     setValues({ ...values, [e.target.name]: e.target.value });
+    if (formError) setFormError("");
+    if (errors[e.target.name]) setErrors({ ...errors, [e.target.name]: "" });
   }
 
   async function submit(e) {
@@ -56,7 +58,8 @@ export default function RegisterPage() {
       }
       navigate("/otp", { state: { userId: data.userId, mode: "register", contact: payload.contact } });
     } catch (err) {
-      setFormError(guestMessage(err, "Couldn't sign up"));
+      const message = guestMessage(err, "Couldn't sign up");
+      if (message) setFormError(message);
     } finally {
       setBusy(false);
     }
@@ -69,7 +72,9 @@ export default function RegisterPage() {
       const user = await social(kind, { idToken, fullName: `${values.firstName} ${values.lastName}`.trim(), adding });
       await openHome(user, navigate);
     } catch (err) {
-      setFormError(guestMessage(err, "Couldn't sign up"));
+      const message = guestMessage(err, "Couldn't sign up");
+      if (message) setFormError(message);
+    } finally {
       setBusy(false);
     }
   }, [social, values.firstName, values.lastName, adding, navigate]);

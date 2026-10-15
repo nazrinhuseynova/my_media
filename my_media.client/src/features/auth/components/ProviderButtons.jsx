@@ -1,6 +1,7 @@
 import { useState } from "react";
 import Button from "../../../components/ui/Button";
 import { api } from "../../../services/api";
+import { guestMessage } from "../services/authApi";
 
 function loadScript(src, id) {
   return new Promise((resolve, reject) => {
@@ -11,7 +12,7 @@ function loadScript(src, id) {
     }
     if (found) {
       found.addEventListener("load", () => resolve(), { once: true });
-      found.addEventListener("error", () => reject(new Error("Skript yüklənmədi")), { once: true });
+      found.addEventListener("error", () => reject(new Error("Couldn't load the sign-in script. Check your connection")), { once: true });
       return;
     }
     const script = document.createElement("script");
@@ -22,7 +23,7 @@ function loadScript(src, id) {
       script.setAttribute("data-ready", "1");
       resolve();
     };
-    script.onerror = () => reject(new Error("Skript yüklənmədi"));
+    script.onerror = () => reject(new Error("Couldn't load the sign-in script. Check your connection"));
     document.body.appendChild(script);
   });
 }
@@ -43,7 +44,7 @@ function googleCredential(clientId) {
       cancel_on_tap_outside: true,
       callback: (response) => {
         if (response?.credential) done(true, response.credential);
-        else done(false, new Error("Google token gəlmədi"));
+        else done(false, new Error("Google sign-in didn't work"));
       },
     });
     window.google.accounts.id.prompt((note) => {
@@ -58,7 +59,7 @@ function googleCredential(clientId) {
         const inner = holder.querySelector("[role='button']");
         if (!inner) {
           holder.remove();
-          done(false, new Error("Google pəncərəsi açılmadı"));
+          done(false, new Error("Google sign-in didn't work"));
           return;
         }
         const onFocus = () => {
@@ -85,7 +86,7 @@ async function appleCredential(clientId) {
   });
   const data = await window.AppleID.auth.signIn();
   const token = data?.authorization?.id_token;
-  if (!token) throw new Error("Apple token gəlmədi");
+  if (!token) throw new Error("Apple sign-in didn't work");
   return token;
 }
 
@@ -109,7 +110,7 @@ function prepareFacebook(appId) {
     script.crossOrigin = "anonymous";
     script.onerror = () => {
       facebookReady = null;
-      reject(new Error("Skript yüklənmədi"));
+      reject(new Error("Couldn't load the sign-in script. Check your connection"));
     };
     document.body.appendChild(script);
   });
@@ -173,7 +174,9 @@ export default function ProviderButtons({ busy, divider, onToken, onError }) {
           : await facebookCredential(clientId);
       await onToken(kind, token);
     } catch (err) {
-      if (!cancelled(err)) onError(err?.message || failedText(kind));
+      if (cancelled(err)) return;
+      const message = guestMessage(err, failedText(kind));
+      if (message) onError(message);
     } finally {
       setPending("");
     }

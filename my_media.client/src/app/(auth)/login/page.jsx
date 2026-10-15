@@ -24,6 +24,8 @@ export default function LoginPage() {
 
   function change(e) {
     setValues({ ...values, [e.target.name]: e.target.value });
+    if (formError) setFormError("");
+    if (errors[e.target.name]) setErrors({ ...errors, [e.target.name]: "" });
   }
 
   async function submit(e) {
@@ -52,10 +54,11 @@ export default function LoginPage() {
     } catch (err) {
       const data = err.response?.data;
       if (data?.needsOtp && data.userId) {
-        navigate("/otp", { state: { userId: data.userId, mode: "register" } });
+        navigate("/otp", { state: { userId: data.userId, mode: "register", contact: values.contact.trim() } });
         return;
       }
-      setFormError(guestMessage(err, "Couldn't sign in"));
+      const message = guestMessage(err, "Couldn't sign in");
+      if (message) setFormError(message);
     } finally {
       setBusy(false);
     }
@@ -77,12 +80,13 @@ export default function LoginPage() {
         else localStorage.removeItem("pulse_refresh");
         useAuthStore.setState({ user: previousUser, loading: false });
         setFormError("Admin is a separate account and can't be opened from here");
-        setBusy(false);
         return;
       }
       await openHome(user, navigate);
     } catch (err) {
-      setFormError(guestMessage(err, "Couldn't sign in"));
+      const message = guestMessage(err, "Couldn't sign in");
+      if (message) setFormError(message);
+    } finally {
       setBusy(false);
     }
   }, [social, adding, navigate]);
