@@ -26,18 +26,27 @@ public static class PrivacyRules
         return await db.Follows.AsNoTracking().AnyAsync(f => f.FollowerId == viewerId && f.FollowingId == owner.Id);
     }
 
-    public static async Task<(bool online, DateTime? lastSeen)> PresenceForViewerAsync(
+    /// <summary>
+    /// Visible=false → izləyici heç nə görmür (nöqtə yox).
+    /// Visible=true + Online → yaşıl; Visible=true + !Online → boz.
+    /// </summary>
+    public static async Task<PresenceView> PresenceForViewerAsync(
         AppDbContext db,
         AppUser target,
         Guid viewerId,
         bool liveOnline)
     {
         if (target.Id == viewerId)
-            return (liveOnline, target.LastSeenAt);
+            return new PresenceView(true, liveOnline, liveOnline ? null : target.LastSeenAt);
 
         if (!await AllowsAsync(db, target, viewerId, target.ShowActivityStatus))
-            return (false, null);
+            return PresenceView.Hidden;
 
-        return (liveOnline && target.IsOnline, target.LastSeenAt);
+        return new PresenceView(true, liveOnline, liveOnline ? null : target.LastSeenAt);
     }
+}
+
+public readonly record struct PresenceView(bool Visible, bool Online, DateTime? LastSeen)
+{
+    public static PresenceView Hidden => new(false, false, null);
 }

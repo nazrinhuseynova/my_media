@@ -377,7 +377,7 @@ export default function SettingsPage() {
       ) : null}
 
       {panel === "privacy" ? (
-        <form className="settings-block" onSubmit={saveProfile}>
+        <form className="settings-block settings-privacy" onSubmit={saveProfile}>
           <p className="muted settings-lead">Instagram / Threads tipli görünürlük və mesaj qaydaları</p>
           <label className="settings-switch">
             <span className="settings-switch-mark"><Icon name="search" size={16} /></span>

@@ -23,14 +23,16 @@ public class ConversationsController : ControllerBase
     private readonly INotificationService _notes;
     private readonly IHubContext<ChatHub> _hub;
     private readonly IFileStorageService _files;
+    private readonly PresenceTracker _presence;
 
-    public ConversationsController(AppDbContext db, UserManager<AppUser> users, INotificationService notes, IHubContext<ChatHub> hub, IFileStorageService files)
+    public ConversationsController(AppDbContext db, UserManager<AppUser> users, INotificationService notes, IHubContext<ChatHub> hub, IFileStorageService files, PresenceTracker presence)
     {
         _db = db;
         _users = users;
         _notes = notes;
         _hub = hub;
         _files = files;
+        _presence = presence;
     }
 
     [HttpGet]
@@ -67,8 +69,9 @@ public class ConversationsController : ControllerBase
             var members = new List<object>();
             foreach (var m in c.Members.Where(x => x.UserId != me && x.User != null))
             {
-                var (online, seen) = await PrivacyRules.PresenceForViewerAsync(_db, m.User, me, m.User.IsOnline);
-                members.Add(DtoMapper.MapUser(m.User, isOnline: online, lastSeenAt: seen));
+                var live = _presence.IsOnline(m.User.Id) || m.User.IsOnline;
+                var presence = await PrivacyRules.PresenceForViewerAsync(_db, m.User, me, live);
+                members.Add(DtoMapper.MapUser(m.User, presence: presence));
             }
             result.Add(new
             {

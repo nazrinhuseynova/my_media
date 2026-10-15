@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Pulse.Domain.Entities;
 using Pulse.Infrastructure.Persistence;
 
 namespace Pulse.Infrastructure.Realtime;
@@ -37,10 +38,8 @@ public class ChatHub : Hub
             await _db.SaveChangesAsync();
         }
 
-        if (user?.ShowActivityStatus != "nobody")
-        {
-            await Clients.Others.SendAsync("presence", new { userId = id.ToString(), online = true });
-        }
+        if (user != null)
+            await PublishPresenceAsync(user, online: true);
 
         await base.OnConnectedAsync();
     }
@@ -57,12 +56,37 @@ public class ChatHub : Hub
                 user.IsOnline = false;
                 user.LastSeenAt = DateTime.UtcNow;
                 await _db.SaveChangesAsync();
-                if (user.ShowActivityStatus != "nobody")
-                    await Clients.Others.SendAsync("presence", new { userId = id.ToString(), online = false, lastSeenAt = user.LastSeenAt });
+                await PublishPresenceAsync(user, online: false);
             }
         }
 
         await base.OnDisconnectedAsync(exception);
+    }
+
+    private async Task PublishPresenceAsync(AppUser user, bool online)
+    {
+        var circle = (user.ShowActivityStatus ?? "everyone").Trim().ToLowerInvariant();
+        if (circle == "nobody") return;
+
+        var payload = new
+        {
+            userId = user.Id.ToString(),
+            online,
+            lastSeenAt = online ? (DateTime?)null : user.LastSeenAt
+        };
+
+        if (circle != "followers")
+        {
+            await Clients.Others.SendAsync("presence", payload);
+            return;
+        }
+
+        var followerIds = await _db.Follows.AsNoTracking()
+            .Where(f => f.FollowingId == user.Id)
+            .Select(f => f.FollowerId.ToString())
+            .ToListAsync();
+        if (followerIds.Count == 0) return;
+        await Clients.Users(followerIds).SendAsync("presence", payload);
     }
 
     public async Task Heartbeat()

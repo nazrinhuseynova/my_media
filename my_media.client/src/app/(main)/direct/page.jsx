@@ -80,6 +80,13 @@ export default function DirectPage() {
   }, []);
 
   const people = useMemo(() => {
+    const resolveOnline = (base, live) => {
+      // null = məxfilik bağlı → nöqtə yox; true=yaşıl; false=boz
+      if (base?.isOnline == null && typeof live !== "boolean") return null;
+      if (typeof live === "boolean") return live;
+      return Boolean(base.isOnline);
+    };
+
     const map = new Map();
     for (const conv of conversations) {
       for (const member of conv.members || []) {
@@ -89,7 +96,7 @@ export default function DirectPage() {
         const live = presence[String(member.id)];
         map.set(member.id, {
           ...member,
-          isOnline: typeof live === "boolean" ? live : Boolean(member.isOnline),
+          isOnline: resolveOnline(member, live),
           convId: directId,
         });
       }
@@ -98,20 +105,23 @@ export default function DirectPage() {
       if (!person?.id || String(person.id) === String(me?.id)) continue;
       const prev = map.get(person.id);
       const live = presence[String(person.id)];
-      const online = typeof live === "boolean" ? live : Boolean(person.isOnline || prev?.isOnline);
+      const base = prev || person;
+      const online = resolveOnline(base, live);
       if (prev) {
-        map.set(person.id, { ...prev, isOnline: online });
+        map.set(person.id, {
+          ...prev,
+          isOnline: online,
+          noteText: person.noteText || prev.noteText,
+          noteKind: person.noteKind || prev.noteKind,
+        });
       } else {
         map.set(person.id, { ...person, isOnline: online, convId: null });
       }
     }
-    return [...map.values()].sort((a, b) => Number(b.isOnline) - Number(a.isOnline));
+    return [...map.values()].sort((a, b) => Number(b.isOnline === true) - Number(a.isOnline === true));
   }, [conversations, following, me?.id, presence]);
 
-  const railPeople = useMemo(() => {
-    const online = people.filter((p) => p.isOnline);
-    return (online.length ? online : people).slice(0, 24);
-  }, [people]);
+  const railPeople = useMemo(() => people.slice(0, 24), [people]);
 
   async function setMyNote(text, kind) {
     try {

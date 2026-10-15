@@ -55,6 +55,15 @@ export default function App() {
         if (user && intro) setIntro(false);
     }, [user, intro]);
 
+    // Welcome/intro zamanı URL-də /login olmasın — yalnız login formasına keçəndə
+    useEffect(() => {
+        if (!intro) return;
+        const { pathname, search } = window.location;
+        if (pathname === "/login" && !new URLSearchParams(search).get("add")) {
+            window.history.replaceState(null, "", "/");
+        }
+    }, [intro]);
+
     useEffect(() => {
         bootstrap();
     }, [bootstrap]);
@@ -73,7 +82,7 @@ export default function App() {
 
     return (
         <>
-        {intro ? <IntroSplash onDone={() => setIntro(false)} /> : null}
+        {intro ? <IntroSplash onDone={() => setIntro(false)} /> : (
         <Routes>
             <Route path="/welcome" element={<WelcomePage />} />
             <Route element={<AuthLayout />}>
@@ -103,6 +112,7 @@ export default function App() {
                 <Route path="/location/:name" element={<LocationPage />} />
             </Route>
         </Routes>
+        )}
         </>
     );
 }

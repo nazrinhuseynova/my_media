@@ -163,7 +163,11 @@ export default function ChatPeopleRail({ people, onOpen, onSetNote, me }) {
                 <span className="chat-person-face">
                   {bubble ? <span className="chat-note-bubble">{bubble}</span> : null}
                   <Avatar src={person.avatar} alt={person.fullName || person.username} />
-                  {person.isOnline ? <span className="chat-person-dot" aria-label="Aktiv" /> : null}
+                  {person.isOnline === true ? (
+                    <span className="chat-person-dot" aria-label="Aktiv" />
+                  ) : person.isOnline === false ? (
+                    <span className="chat-person-dot is-offline" aria-label="Oflayn" />
+                  ) : null}
                 </span>
                 <span>{person.username}</span>
               </button>

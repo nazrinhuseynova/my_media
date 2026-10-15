@@ -14,10 +14,29 @@ public static class DtoMapper
         return (u.NoteText.Trim(), string.IsNullOrWhiteSpace(u.NoteKind) ? "text" : u.NoteKind);
     }
 
-    public static object MapUser(AppUser u, string role = "user", bool? isOnline = null, DateTime? lastSeenAt = null, bool includePrivacy = false)
+    public static object MapUser(AppUser u, string role = "user", bool? isOnline = null, DateTime? lastSeenAt = null, bool includePrivacy = false, PresenceView? presence = null)
     {
-        var online = isOnline ?? u.IsOnline;
-        var seen = lastSeenAt ?? u.LastSeenAt;
+        bool? online;
+        DateTime? seen;
+        if (presence.HasValue)
+        {
+            if (!presence.Value.Visible)
+            {
+                online = null;
+                seen = null;
+            }
+            else
+            {
+                online = presence.Value.Online;
+                seen = presence.Value.LastSeen;
+            }
+        }
+        else
+        {
+            online = isOnline ?? u.IsOnline;
+            seen = lastSeenAt ?? u.LastSeenAt;
+        }
+
         var (noteText, noteKind) = LiveNote(u);
         if (includePrivacy)
         {

@@ -8,6 +8,7 @@ using Pulse.Application.Files.Interfaces;
 using Pulse.Application.Notifications.Interfaces;
 using Pulse.Domain.Entities;
 using Pulse.Infrastructure.Persistence;
+using Pulse.Infrastructure.Realtime;
 
 namespace Pulse.API.Controllers;
 
@@ -25,13 +26,15 @@ public class UsersController : ControllerBase
     private readonly UserManager<AppUser> _users;
     private readonly INotificationService _notes;
     private readonly IFileStorageService _files;
+    private readonly PresenceTracker _presence;
 
-    public UsersController(AppDbContext db, UserManager<AppUser> users, INotificationService notes, IFileStorageService files)
+    public UsersController(AppDbContext db, UserManager<AppUser> users, INotificationService notes, IFileStorageService files, PresenceTracker presence)
     {
         _db = db;
         _users = users;
         _notes = notes;
         _files = files;
+        _presence = presence;
     }
 
     [HttpGet("/api/users/{username}")]
@@ -105,9 +108,13 @@ public class UsersController : ControllerBase
             paging.Page,
             paging.PageSize,
             postTotal);
+        var live = _presence.IsOnline(user.Id) || user.IsOnline;
+        var presence = me.HasValue
+            ? await PrivacyRules.PresenceForViewerAsync(_db, user, me.Value, live)
+            : PresenceView.Hidden;
         return Ok(new
         {
-            user = DtoMapper.MapUser(user, role),
+            user = DtoMapper.MapUser(user, role, presence: presence),
             followers,
             following,
             posts = postPage,
@@ -127,7 +134,7 @@ public class UsersController : ControllerBase
         if (!await CanListPeople(user)) return Ok(Array.Empty<object>());
         var ids = await _db.Follows.Where(f => f.FollowingId == user.Id).Select(f => f.FollowerId).ToListAsync();
         var list = await _users.Users.Where(u => ids.Contains(u.Id) && u.IsActive && !u.IsBanned).ToListAsync();
-        return Ok(list.Select(u => DtoMapper.MapUser(u)));
+        return Ok(await MapPeoplePresenceAsync(list));
     }
 
     [HttpGet("/api/users/{username}/following")]
@@ -138,7 +145,20 @@ public class UsersController : ControllerBase
         if (!await CanListPeople(user)) return Ok(Array.Empty<object>());
         var ids = await _db.Follows.Where(f => f.FollowerId == user.Id).Select(f => f.FollowingId).ToListAsync();
         var list = await _users.Users.Where(u => ids.Contains(u.Id) && u.IsActive && !u.IsBanned).ToListAsync();
-        return Ok(list.Select(u => DtoMapper.MapUser(u)));
+        return Ok(await MapPeoplePresenceAsync(list));
+    }
+
+    private async Task<List<object>> MapPeoplePresenceAsync(List<AppUser> list)
+    {
+        var me = DtoMapper.GetUserId(User);
+        var result = new List<object>(list.Count);
+        foreach (var person in list)
+        {
+            var live = _presence.IsOnline(person.Id) || person.IsOnline;
+            var presence = await PrivacyRules.PresenceForViewerAsync(_db, person, me, live);
+            result.Add(DtoMapper.MapUser(person, presence: presence));
+        }
+        return result;
     }
 
     [HttpPost("/api/users/{id:guid}/follow")]
