@@ -47,6 +47,8 @@ builder.Services.AddScoped<IFileStorageService, CloudinaryFileStorageService>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<IOtpSender, OtpSender>();
 builder.Services.AddSingleton<IUserIdProvider, PulseUserIdProvider>();
+builder.Services.AddSingleton<PresenceTracker>();
+builder.Services.AddHostedService<PresenceCleanup>();
 builder.Services.AddSignalR();
 builder.WebHost.ConfigureKestrel(options =>
 {
@@ -127,12 +129,19 @@ builder.Services
                     ?? principal?.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
                 if (string.IsNullOrWhiteSpace(userId))
                 {
-                    context.Fail("Token istifadəçi id-si yoxdur");
+                    context.Fail("Sessiya bitib");
                     return;
                 }
 
                 var users = context.HttpContext.RequestServices.GetRequiredService<UserManager<AppUser>>();
                 var user = await users.FindByIdAsync(userId);
+                if (user != null && user.IsBanned && user.BannedUntil.HasValue && user.BannedUntil.Value <= DateTime.UtcNow)
+                {
+                    user.IsBanned = false;
+                    user.BannedUntil = null;
+                    user.UpdatedAt = DateTime.UtcNow;
+                    await users.UpdateAsync(user);
+                }
                 var stamp = principal?.FindFirst("sst")?.Value;
                 if (user == null || !user.IsActive || user.IsBanned || string.IsNullOrEmpty(stamp) || stamp != user.SecurityStamp)
                 {
@@ -186,5 +195,6 @@ app.UseAuthorization();
 app.MapControllers();
 app.MapHub<NotificationHub>("/hubs/notifications");
 app.MapHub<ChatHub>("/hubs/chat");
+app.MapHub<LiveHub>("/hubs/live");
 
 app.Run();

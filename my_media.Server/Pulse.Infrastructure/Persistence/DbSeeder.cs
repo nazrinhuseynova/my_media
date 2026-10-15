@@ -21,6 +21,7 @@ public static class DbSeeder
 
         if (await users.Users.AnyAsync())
         {
+            await EnsureDeskAdminAsync(users);
             await EnsureFollowedStoriesAsync(db, users);
             await EnsureLivesAsync(db, users);
             await LinkMusicAsync(db);
@@ -166,6 +167,52 @@ public static class DbSeeder
         await db.SaveChangesAsync();
     }
 
+    private static async Task EnsureDeskAdminAsync(UserManager<AppUser> users)
+    {
+        var admin = await users.FindByNameAsync("admin");
+        if (admin == null)
+        {
+            admin = new AppUser
+            {
+                Id = Guid.NewGuid(),
+                UserName = "admin",
+                Email = "admin@pulse.az",
+                PhoneNumber = "+994501112233",
+                FullName = "Pulse Admin",
+                AvatarUrl = "https://i.pravatar.cc/300?img=12",
+                IsPrivate = false,
+                IsActive = true,
+                EmailConfirmed = true,
+                Language = "az"
+            };
+            var created = await users.CreateAsync(admin, "Admin123!");
+            if (!created.Succeeded)
+            {
+                throw new Exception(string.Join(", ", created.Errors.Select(e => e.Description)));
+            }
+        }
+        else if (!admin.EmailConfirmed || !admin.IsActive)
+        {
+            admin.EmailConfirmed = true;
+            admin.IsActive = true;
+            await users.UpdateAsync(admin);
+        }
+
+        if (!await users.IsInRoleAsync(admin, "Admin"))
+        {
+            await users.AddToRoleAsync(admin, "Admin");
+        }
+
+        foreach (var name in new[] { "leyla", "elvin", "aysel", "kamran" })
+        {
+            var person = await users.FindByNameAsync(name);
+            if (person != null && await users.IsInRoleAsync(person, "Admin"))
+            {
+                await users.RemoveFromRoleAsync(person, "Admin");
+            }
+        }
+    }
+
     private static async Task<AppUser> CreateUser(UserManager<AppUser> users, string username, string fullName, string email, string phone, string avatar, bool isPrivate)
     {
         var user = new AppUser
@@ -178,7 +225,8 @@ public static class DbSeeder
             AvatarUrl = avatar,
             IsPrivate = isPrivate,
             IsActive = true,
-            EmailConfirmed = true
+            EmailConfirmed = true,
+            Language = "az"
         };
 
         var result = await users.CreateAsync(user, "Admin123!");

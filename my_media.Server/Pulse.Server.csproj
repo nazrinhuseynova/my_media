@@ -7,6 +7,7 @@
     <SpaRoot>..\my_media.client</SpaRoot>
     <SpaProxyLaunchCommand>npm run dev</SpaProxyLaunchCommand>
     <SpaProxyServerUrl>https://localhost:53464</SpaProxyServerUrl>
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
     <DefaultItemExcludes>$(DefaultItemExcludes);Pulse.Application\**;Pulse.Domain\**;Pulse.Infrastructure\**;Pulse.API\bin\**;Pulse.API\obj\**;Pulse.slnx;**\*.csproj</DefaultItemExcludes>
   </PropertyGroup>
 
