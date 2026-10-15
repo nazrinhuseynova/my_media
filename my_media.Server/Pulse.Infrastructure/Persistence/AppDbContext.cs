@@ -127,6 +127,17 @@ public class AppDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, Guid>
         builder.Entity<Post>().Property(p => p.Slug).HasMaxLength(140).HasDefaultValue("").ValueGeneratedNever();
         builder.Entity<Post>().HasIndex(p => p.Slug).IsUnique().HasFilter("[Slug] <> ''");
         builder.Entity<AppUser>().Property(u => u.ProfileViewHistory).HasDefaultValue(true);
+        builder.Entity<AppUser>().Property(u => u.ShowActivityStatus).HasMaxLength(16).HasDefaultValue("everyone");
+        builder.Entity<AppUser>().Property(u => u.WhoCanMessage).HasMaxLength(16).HasDefaultValue("everyone");
+        builder.Entity<AppUser>().Property(u => u.WhoCanTag).HasMaxLength(16).HasDefaultValue("everyone");
+        builder.Entity<AppUser>().Property(u => u.WhoCanMention).HasMaxLength(16).HasDefaultValue("everyone");
+        builder.Entity<AppUser>().Property(u => u.ReadReceipts).HasDefaultValue(true);
+        builder.Entity<AppUser>().Property(u => u.AllowStoryReplies).HasDefaultValue(true);
+        builder.Entity<AppUser>().Property(u => u.AllowStorySharing).HasDefaultValue(true);
+        builder.Entity<AppUser>().Property(u => u.BannedUntil);
+        builder.Entity<AppUser>().Property(u => u.Language).HasMaxLength(12);
+        builder.Entity<AppUser>().Property(u => u.NoteText).HasMaxLength(80);
+        builder.Entity<AppUser>().Property(u => u.NoteKind).HasMaxLength(16).HasDefaultValue("text");
         builder.Entity<RefreshToken>().Property(t => t.DeviceName).HasMaxLength(80).HasDefaultValue("");
         builder.Entity<RefreshToken>().Property(t => t.LastUsedAt).HasDefaultValueSql("GETUTCDATE()");
 
