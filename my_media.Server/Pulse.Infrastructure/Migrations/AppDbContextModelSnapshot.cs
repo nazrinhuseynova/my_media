@@ -169,6 +169,9 @@ namespace Pulse.Infrastructure.Migrations
                     b.Property<string>("AvatarUrl")
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<DateTime?>("BannedUntil")
+                        .HasColumnType("datetime2");
+
                     b.Property<string>("Bio")
                         .HasColumnType("nvarchar(max)");
 
@@ -201,6 +204,10 @@ namespace Pulse.Infrastructure.Migrations
 
                     b.Property<bool>("IsPrivate")
                         .HasColumnType("bit");
+
+                    b.Property<string>("Language")
+                        .HasMaxLength(12)
+                        .HasColumnType("nvarchar(12)");
 
                     b.Property<DateTime?>("LastSeenAt")
                         .HasColumnType("datetime2");
