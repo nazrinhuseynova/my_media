@@ -104,6 +104,8 @@ public class AppDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, Guid>
         builder.Entity<ReelLike>().Property(x => x.Reaction).HasMaxLength(20).HasDefaultValue("like");
         builder.Entity<Story>().Property(x => x.Audience).HasMaxLength(16);
         builder.Entity<LiveRoom>().Property(x => x.Title).HasMaxLength(80);
+        builder.Entity<LiveRoom>().Property(x => x.MaxSeats).HasDefaultValue(4);
+        builder.Entity<LiveRoom>().Property(x => x.LikeCount).HasDefaultValue(0);
         builder.Entity<LiveSeat>().HasIndex(x => new { x.RoomId, x.UserId }).IsUnique();
         builder.Entity<LiveSeat>()
             .HasOne(x => x.Room)

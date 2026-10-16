@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Pulse.API.Helpers;
+using Pulse.Application.Notifications.Interfaces;
 using Pulse.Domain.Entities;
 using Pulse.Infrastructure.Persistence;
 using Pulse.Infrastructure.Realtime;
@@ -16,12 +17,14 @@ public class AdminController : ControllerBase
     private readonly AppDbContext _db;
     private readonly UserManager<AppUser> _users;
     private readonly PresenceTracker _presence;
+    private readonly INotificationService _notes;
 
-    public AdminController(AppDbContext db, UserManager<AppUser> users, PresenceTracker presence)
+    public AdminController(AppDbContext db, UserManager<AppUser> users, PresenceTracker presence, INotificationService notes)
     {
         _db = db;
         _users = users;
         _presence = presence;
+        _notes = notes;
     }
 
     [HttpGet("/api/admin/stats")]
@@ -396,54 +399,15 @@ public class AdminController : ControllerBase
     [HttpPost("/api/admin/users/{id:guid}/ban")]
     public async Task<IActionResult> Ban(Guid id, [FromBody] BanBody body)
     {
-        var user = await _users.FindByIdAsync(id.ToString());
-        if (user == null) return NotFound(new { message = "İstifadəçi tapılmadı" });
-        if (id == DtoMapper.GetUserId(User) || await _users.IsInRoleAsync(user, "Admin"))
-            return BadRequest(new { message = "Admin hesabı bloklanmır" });
-
         var mode = (body.Mode ?? "permanent").Trim().ToLowerInvariant();
-        if (mode is not ("lift" or "day" or "week" or "month" or "permanent"))
-            return BadRequest(new { message = "Blok müddəti səhvdir" });
-        if (mode == "lift")
-        {
-            user.IsBanned = false;
-            user.BannedUntil = null;
-        }
-        else if (mode == "day")
-        {
-            user.IsBanned = true;
-            user.BannedUntil = DateTime.UtcNow.AddDays(1);
-        }
-        else if (mode == "week")
-        {
-            user.IsBanned = true;
-            user.BannedUntil = DateTime.UtcNow.AddDays(7);
-        }
-        else if (mode == "month")
-        {
-            user.IsBanned = true;
-            user.BannedUntil = DateTime.UtcNow.AddDays(30);
-        }
-        else
-        {
-            user.IsBanned = true;
-            user.BannedUntil = null;
-        }
-
-        user.UpdatedAt = DateTime.UtcNow;
-        await _users.UpdateAsync(user);
+        var (result, closed, user) = await ApplyBan(id, mode);
+        if (result is not OkObjectResult || user == null) return result;
         if (user.IsBanned)
         {
-            await DropSessions(user);
-            await CloseTargetReports("user", user.Id, "ban");
-            await _db.SaveChangesAsync();
+            await NotifyReporters(closed, "ban", mode);
+            await _notes.AddAsync(user.Id, null, "moderation", user.Id.ToString(), OwnerDecisionText("ban", "user", mode));
         }
-        return Ok(new
-        {
-            id = user.Id.ToString(),
-            isBanned = user.IsBanned,
-            bannedUntil = user.BannedUntil
-        });
+        return result;
     }
 
     [HttpDelete("/api/admin/users/{id:guid}")]
@@ -468,8 +432,9 @@ public class AdminController : ControllerBase
         await _users.SetUserNameAsync(user, $"deleted_{stamp}");
         await _users.UpdateAsync(user);
         await DropSessions(user);
-        await CloseTargetReports("user", user.Id, "remove");
+        var closed = await CloseTargetReports("user", user.Id, "remove");
         await _db.SaveChangesAsync();
+        await NotifyReporters(closed, "remove", null);
         return Ok(new { id = id.ToString() });
     }
 
@@ -478,10 +443,13 @@ public class AdminController : ControllerBase
     {
         var post = await _db.Posts.FirstOrDefaultAsync(p => p.Id == id && !p.IsDeleted);
         if (post == null) return NotFound(new { message = "Paylaşım tapılmadı" });
+        var ownerId = post.UserId;
         post.IsDeleted = true;
         post.UpdatedAt = DateTime.UtcNow;
-        await CloseTargetReports("post", id, "remove");
+        var closed = await CloseTargetReports("post", id, "remove");
         await _db.SaveChangesAsync();
+        await NotifyReporters(closed, "remove", null);
+        await _notes.AddAsync(ownerId, null, "moderation", id.ToString(), OwnerDecisionText("remove", "post", null));
         return Ok(new { id = id.ToString() });
     }
 
@@ -490,10 +458,13 @@ public class AdminController : ControllerBase
     {
         var reel = await _db.Reels.FirstOrDefaultAsync(r => r.Id == id && !r.IsDeleted);
         if (reel == null) return NotFound(new { message = "Reel tapılmadı" });
+        var ownerId = reel.UserId;
         reel.IsDeleted = true;
         reel.UpdatedAt = DateTime.UtcNow;
-        await CloseTargetReports("reel", id, "remove");
+        var closed = await CloseTargetReports("reel", id, "remove");
         await _db.SaveChangesAsync();
+        await NotifyReporters(closed, "remove", null);
+        await _notes.AddAsync(ownerId, null, "moderation", id.ToString(), OwnerDecisionText("remove", "reel", null));
         return Ok(new { id = id.ToString() });
     }
 
@@ -502,9 +473,12 @@ public class AdminController : ControllerBase
     {
         var story = await _db.Stories.FirstOrDefaultAsync(s => s.Id == id);
         if (story == null) return NotFound(new { message = "Hekayə tapılmadı" });
+        var ownerId = story.UserId;
         await RemoveStory(story);
-        await CloseTargetReports("story", id, "remove");
+        var closed = await CloseTargetReports("story", id, "remove");
         await _db.SaveChangesAsync();
+        await NotifyReporters(closed, "remove", null);
+        await _notes.AddAsync(ownerId, null, "moderation", id.ToString(), OwnerDecisionText("remove", "story", null));
         return Ok(new { id = id.ToString() });
     }
 
@@ -515,6 +489,7 @@ public class AdminController : ControllerBase
         if (room == null) return NotFound(new { message = "Canlı yayım bitib" });
         room.EndedAt = DateTime.UtcNow;
         room.UpdatedAt = DateTime.UtcNow;
+        LivePresence.ClearRoom(id);
         await _db.SaveChangesAsync();
         return Ok(new { id = id.ToString(), ended = true });
     }
@@ -522,10 +497,24 @@ public class AdminController : ControllerBase
     [HttpDelete("/api/admin/comments/{kind}/{id:guid}")]
     public async Task<IActionResult> DeleteComment(string kind, Guid id)
     {
+        Guid? ownerId = null;
+        if (kind == "post")
+        {
+            var comment = await _db.Comments.AsNoTracking().FirstOrDefaultAsync(c => c.Id == id);
+            ownerId = comment?.UserId;
+        }
+        else if (kind == "reel")
+        {
+            var comment = await _db.ReelComments.AsNoTracking().FirstOrDefaultAsync(c => c.Id == id);
+            ownerId = comment?.UserId;
+        }
         var gone = kind == "reel" ? await DeleteReelComment(id) : kind == "post" ? await DeletePostComment(id) : false;
         if (!gone) return NotFound(new { message = "Şərh tapılmadı" });
-        await CloseTargetReports("comment", id, "remove");
+        var closed = await CloseTargetReports("comment", id, "remove");
         await _db.SaveChangesAsync();
+        await NotifyReporters(closed, "remove", null);
+        if (ownerId.HasValue)
+            await _notes.AddAsync(ownerId.Value, null, "moderation", id.ToString(), OwnerDecisionText("remove", "comment", null));
         return Ok(new { id = id.ToString() });
     }
 
@@ -538,6 +527,12 @@ public class AdminController : ControllerBase
         var action = (body.Action ?? "").Trim().ToLowerInvariant();
         if (action is not ("dismissed" or "remove" or "ban"))
             return BadRequest(new { message = "Əməliyyat tanınmır" });
+        var mode = string.IsNullOrWhiteSpace(body.Mode) ? "permanent" : body.Mode.Trim().ToLowerInvariant();
+
+        var related = await _db.Reports
+            .Where(r => r.Status == "open" && r.TargetType == report.TargetType && r.TargetId == report.TargetId)
+            .ToListAsync();
+        if (related.All(r => r.Id != report.Id)) related.Add(report);
 
         Guid? ownerId = null;
         if (Guid.TryParse(report.TargetId, out var targetId))
@@ -590,6 +585,7 @@ public class AdminController : ControllerBase
                 {
                     var gone = await DeleteUser(targetId);
                     if (gone is not OkObjectResult) return gone;
+                    return Ok(new { id = report.Id.ToString(), status = "remove" });
                 }
             }
         }
@@ -597,8 +593,18 @@ public class AdminController : ControllerBase
         if (action == "ban")
         {
             if (!ownerId.HasValue) return BadRequest(new { message = "Bloklanacaq hesab tapılmadı" });
-            var banned = await Ban(ownerId.Value, new BanBody { Mode = string.IsNullOrWhiteSpace(body.Mode) ? "permanent" : body.Mode });
+            var (banned, closed, _) = await ApplyBan(ownerId.Value, mode);
             if (banned is not OkObjectResult) return banned;
+            foreach (var row in related.Where(r => r.Status == "open"))
+            {
+                row.Status = "ban";
+                row.UpdatedAt = DateTime.UtcNow;
+            }
+            await _db.SaveChangesAsync();
+            var reporters = related.Concat(closed).GroupBy(r => r.FromId).Select(g => g.First()).ToList();
+            await NotifyReporters(reporters, "ban", mode);
+            await _notes.AddAsync(ownerId.Value, null, "moderation", report.TargetId, OwnerDecisionText("ban", report.TargetType, mode));
+            return Ok(new { id = report.Id.ToString(), status = "ban" });
         }
 
         var now = DateTime.UtcNow;
@@ -606,13 +612,10 @@ public class AdminController : ControllerBase
         {
             report.Status = "dismissed";
             report.UpdatedAt = now;
+            related = new List<Report> { report };
         }
         else
         {
-            var related = await _db.Reports
-                .Where(r => r.Status == "open" && r.TargetType == report.TargetType && r.TargetId == report.TargetId)
-                .ToListAsync();
-            if (related.All(r => r.Id != report.Id)) related.Add(report);
             foreach (var row in related)
             {
                 row.Status = action;
@@ -621,6 +624,9 @@ public class AdminController : ControllerBase
         }
 
         await _db.SaveChangesAsync();
+        await NotifyReporters(related, action, mode);
+        if (action == "remove" && ownerId.HasValue && report.TargetType != "user")
+            await _notes.AddAsync(ownerId.Value, null, "moderation", report.TargetId, OwnerDecisionText("remove", report.TargetType, null));
         return Ok(new { id = report.Id.ToString(), status = report.Status });
     }
 
@@ -686,7 +692,64 @@ public class AdminController : ControllerBase
         _db.Stories.Remove(story);
     }
 
-    private async Task CloseTargetReports(string type, Guid id, string status)
+    private async Task<(IActionResult result, List<Report> closed, AppUser? user)> ApplyBan(Guid id, string mode)
+    {
+        var user = await _users.FindByIdAsync(id.ToString());
+        if (user == null) return (NotFound(new { message = "İstifadəçi tapılmadı" }), new List<Report>(), null);
+        if (id == DtoMapper.GetUserId(User) || await _users.IsInRoleAsync(user, "Admin"))
+            return (BadRequest(new { message = "Admin hesabı bloklanmır" }), new List<Report>(), null);
+        if (mode is not ("lift" or "day" or "week" or "month" or "permanent"))
+            return (BadRequest(new { message = "Blok müddəti səhvdir" }), new List<Report>(), null);
+
+        if (mode == "lift")
+        {
+            user.IsBanned = false;
+            user.BannedUntil = null;
+        }
+        else if (mode == "day")
+        {
+            user.IsBanned = true;
+            user.BannedUntil = DateTime.UtcNow.AddDays(1);
+        }
+        else if (mode == "week")
+        {
+            user.IsBanned = true;
+            user.BannedUntil = DateTime.UtcNow.AddDays(7);
+        }
+        else if (mode == "month")
+        {
+            user.IsBanned = true;
+            user.BannedUntil = DateTime.UtcNow.AddDays(30);
+        }
+        else
+        {
+            user.IsBanned = true;
+            user.BannedUntil = null;
+        }
+
+        user.UpdatedAt = DateTime.UtcNow;
+        await _users.UpdateAsync(user);
+        var closed = new List<Report>();
+        if (user.IsBanned)
+        {
+            await DropSessions(user);
+            closed = await CloseTargetReports("user", user.Id, "ban");
+            await _db.SaveChangesAsync();
+        }
+        else
+        {
+            await _db.SaveChangesAsync();
+        }
+
+        return (Ok(new
+        {
+            id = user.Id.ToString(),
+            isBanned = user.IsBanned,
+            bannedUntil = user.BannedUntil
+        }), closed, user);
+    }
+
+    private async Task<List<Report>> CloseTargetReports(string type, Guid id, string status)
     {
         var key = id.ToString();
         var rows = await _db.Reports.Where(r => r.Status == "open" && r.TargetType == type && r.TargetId == key).ToListAsync();
@@ -696,6 +759,58 @@ public class AdminController : ControllerBase
             row.Status = status;
             row.UpdatedAt = now;
         }
+        return rows;
+    }
+
+    private async Task NotifyReporters(IEnumerable<Report> rows, string status, string? mode)
+    {
+        var text = ReporterDecisionText(status, mode);
+        var seen = new HashSet<Guid>();
+        foreach (var row in rows)
+        {
+            if (!seen.Add(row.FromId)) continue;
+            await _notes.AddAsync(row.FromId, null, "report", row.Id.ToString(), text);
+        }
+    }
+
+    private static string ReporterDecisionText(string status, string? mode)
+    {
+        if (status == "dismissed") return "Şikayətinə baxıldı. Qayda pozuntusu tapılmadı.";
+        if (status == "remove") return "Şikayətinə baxıldı. Uyğunsuz kontent götürüldü.";
+        if (status == "ban")
+        {
+            return mode switch
+            {
+                "day" => "Şikayətinə baxıldı. Hesab 1 gün məhdudlaşdırıldı.",
+                "week" => "Şikayətinə baxıldı. Hesab 7 gün məhdudlaşdırıldı.",
+                "month" => "Şikayətinə baxıldı. Hesab 30 gün məhdudlaşdırıldı.",
+                _ => "Şikayətinə baxıldı. Hesab həmişəlik məhdudlaşdırıldı."
+            };
+        }
+        return "Şikayətinə baxıldı.";
+    }
+
+    private static string OwnerDecisionText(string action, string targetType, string? mode)
+    {
+        if (action == "remove")
+        {
+            return targetType switch
+            {
+                "comment" => "Şərhin qaydalarımıza uyğun olmadığı üçün silindi.",
+                "story" => "Hekayən qaydalarımıza uyğun olmadığı üçün götürüldü.",
+                "reel" => "Reelin qaydalarımıza uyğun olmadığı üçün götürüldü.",
+                "user" => "Hesabın qaydalarımıza uyğun olmadığı üçün bağlandı.",
+                _ => "Paylaşımın qaydalarımıza uyğun olmadığı üçün götürüldü."
+            };
+        }
+
+        return mode switch
+        {
+            "day" => "Hesabın 1 gün müddətinə məhdudlaşdırıldı.",
+            "week" => "Hesabın 7 gün müddətinə məhdudlaşdırıldı.",
+            "month" => "Hesabın 30 gün müddətinə məhdudlaşdırıldı.",
+            _ => "Hesabın həmişəlik məhdudlaşdırıldı."
+        };
     }
 
     private async Task LiftExpiredBans()

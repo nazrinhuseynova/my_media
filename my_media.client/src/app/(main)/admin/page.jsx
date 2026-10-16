@@ -343,7 +343,9 @@ export default function AdminPage() {
                         {decide(`remove:${row.id}`, (
                           <Button variant="danger" onClick={() => resolve(row, "remove")}>Silinsin</Button>
                         )) || <Button variant="danger" onClick={() => setAsk(`remove:${row.id}`)}>Sil</Button>}
+                        <Button variant="ghost" onClick={() => resolve(row, "ban", "day")}>1 gün blok</Button>
                         <Button variant="ghost" onClick={() => resolve(row, "ban", "week")}>7 gün blok</Button>
+                        <Button variant="ghost" onClick={() => resolve(row, "ban", "month")}>30 gün blok</Button>
                         {decide(`rban:${row.id}`, (
                           <Button variant="danger" onClick={() => resolve(row, "ban", "permanent")}>Bloklansın</Button>
                         )) || <Button variant="danger" onClick={() => setAsk(`rban:${row.id}`)}>Həmişəlik blok</Button>}

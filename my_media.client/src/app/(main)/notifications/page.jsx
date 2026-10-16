@@ -14,6 +14,9 @@ const TYPE_LABEL = {
   follow: "İzləmə",
   mention: "İşarə",
   dm: "Mesaj",
+  report: "Şikayət",
+  moderation: "Nəzarət",
+  live_invite: "Canlı dəvət",
 };
 
 function whoOf(n) {
@@ -41,6 +44,8 @@ export default function NotificationsPage() {
   function hrefFor(n) {
     const text = String(n.text || "").toLowerCase();
     if (n.type === "dm") return "/direct";
+    if (n.type === "report" || n.type === "moderation") return null;
+    if (n.type === "live_invite" && n.entityId) return `/?live=${n.entityId}`;
     if ((n.type === "like" || n.type === "comment" || n.type === "mention") && n.entityId) {
       if (text.includes("reel")) return `/reels?v=${n.entityId}`;
       return `/p/${n.entityId}`;
@@ -52,7 +57,7 @@ export default function NotificationsPage() {
     return null;
   }
 
-  const incoming = items.filter((n) => !n.read && ["like", "comment", "follow", "mention"].includes(n.type));
+  const incoming = items.filter((n) => !n.read && ["like", "comment", "follow", "mention", "report", "moderation", "live_invite"].includes(n.type));
   const history = items.filter((n) => !incoming.some((x) => x.id === n.id));
   const incomingEmpty = requests.length === 0 && incoming.length === 0;
 
@@ -81,7 +86,7 @@ export default function NotificationsPage() {
       <header className="notify-head">
         <div>
           <h2>Bildirişlər</h2>
-          <p className="muted">Bəyənmə, şərh və izləmə xəbərləri</p>
+          <p className="muted">Bəyənmə, şərh, izləmə və şikayət qərarları</p>
         </div>
         <Button variant="ghost" type="button" onClick={markRead}>Hamısını oxu</Button>
       </header>
@@ -89,7 +94,7 @@ export default function NotificationsPage() {
       <section className="notify-section">
         <h3>Gələnlər</h3>
         {!booted ? <ListSkeleton /> : incomingEmpty ? (
-          <p className="notify-empty">Yeni bəyənmə, şərh və ya izləmə yoxdur</p>
+          <p className="notify-empty">Yeni bəyənmə, şərh, izləmə və ya şikayət qərarı yoxdur</p>
         ) : (
           <>
             {requests.map((r) => (

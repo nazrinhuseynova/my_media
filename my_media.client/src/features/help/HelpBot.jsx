@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { api } from "../../services/api";
 import { CHIPS, chipsOf, starterChips } from "./knowledge";
-import { answerFor } from "./match";
+import { answerFor, formatReportStatus } from "./match";
 
 const POS_KEY = "pulse_help_pos_v1";
 const HI_KEY = "pulse_help_hi_v1";
@@ -157,17 +158,36 @@ export default function HelpBot() {
     }
   }
 
-  function ask(text) {
+  async function ask(text) {
     const clean = text.trim();
     if (!clean || typing) return;
     const mine = { id: `u-${Date.now()}`, role: "user", text: clean };
     setMessages((list) => [...list, mine]);
     setDraft("");
     setTyping(true);
-    const reply = answerFor(clean);
+    const reply = answerFor(clean) || {
+      text: "Bunu dəqiq tuta bilmədim. Şikayət, ayar, paylaşım, mesaj və hesab haqqında soruşa bilərsən.",
+      chips: chipsOf(["report", "settings", "post", "direct", "safety", "start"]),
+    };
+    let textOut = reply.text;
+    if (reply.live === "reports") {
+      try {
+        const rows = await api.get("/api/reports/mine");
+        textOut = formatReportStatus(Array.isArray(rows) ? rows : []);
+      } catch {
+        textOut = "Şikayət statusunu indi aça bilmədim. Bir az sonra yenidən soruş, ya da Bildirişlərə bax.";
+      }
+    }
     const delay = Math.min(900, 380 + clean.length * 8);
     waitRef.current = window.setTimeout(() => {
-      setMessages((list) => [...list, { id: `b-${Date.now()}`, role: "bot", ...reply }]);
+      setMessages((list) => [...list, {
+        id: `b-${Date.now()}`,
+        role: "bot",
+        text: textOut,
+        to: reply.to || "",
+        linkLabel: reply.linkLabel || "",
+        chips: reply.chips || [],
+      }]);
       setTyping(false);
     }, delay);
   }
@@ -226,7 +246,7 @@ export default function HelpBot() {
               <article key={row.id} className={`help-msg is-${row.role}`}>
                 {row.role === "bot" ? <Face tiny /> : null}
                 <div>
-                  <p>{row.text}</p>
+                  <p style={{ whiteSpace: "pre-wrap" }}>{row.text}</p>
                   {row.to ? <button type="button" className="help-jump" onClick={() => openLink(row.to)}>{row.linkLabel}</button> : null}
                   {row.chips?.length ? (
                     <div className="help-chips">

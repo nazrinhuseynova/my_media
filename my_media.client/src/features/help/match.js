@@ -45,5 +45,35 @@ export function answerFor(text) {
     to: best.to || "",
     linkLabel: best.linkLabel || "",
     chips: chipsOf(best.next || []),
+    live: best.live || "",
   };
+}
+
+export function reportStatusLine(row) {
+  const kind = {
+    post: "post",
+    reel: "reel",
+    comment: "şərh",
+    story: "hekayə",
+    user: "hesab",
+  }[row.targetType] || row.targetType;
+  const state = {
+    open: "növbədədir",
+    dismissed: "rədd edildi — pozuntu tapılmadı",
+    remove: "uyğunsuz kontent götürüldü",
+    ban: "hesab məhdudlaşdırıldı",
+  }[row.status] || row.status;
+  return `• ${kind}: ${state}`;
+}
+
+export function formatReportStatus(list) {
+  if (!Array.isArray(list) || list.length === 0) {
+    return "Hələ göndərilmiş şikayətin yoxdur. Kontentin yanındakı «Şikayət» ilə göndərə bilərsən. Qərar gələndə Bildirişlərdə görünəcək.";
+  }
+  const lines = list.slice(0, 8).map(reportStatusLine);
+  const open = list.filter((row) => row.status === "open").length;
+  const head = open > 0
+    ? `${list.length} şikayətin var, ${open} nəzarət növbəsindədir.`
+    : `${list.length} şikayətin var; hamısına baxılıb.`;
+  return `${head}\n${lines.join("\n")}\nƏtraflı qərar mətni Bildirişlərdədir.`;
 }

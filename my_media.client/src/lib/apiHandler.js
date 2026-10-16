@@ -805,16 +805,86 @@ export async function dispatch(config) {
       targetId: body.targetId,
       reason: body.reason,
       createdAt: nowIso(),
+      updatedAt: nowIso(),
       status: "open",
     });
     saveDb(db);
     return ok({ message: "Şikayət göndərildi" });
   }
 
+  if (method === "get" && path === "/api/reports/mine") {
+    const me = requireUser(config, db);
+    return ok(db.reports.filter((r) => r.fromId === me.id).slice(0, 30));
+  }
+
   if (method === "get" && path === "/api/admin/reports") {
     const me = requireUser(config, db);
     if (me.role !== "admin") fail("İcazə yoxdur", 403);
-    return ok(db.reports);
+    const status = String(config.params?.status || "open").toLowerCase();
+    let rows = db.reports.slice();
+    if (status && status !== "all") rows = rows.filter((r) => r.status === status);
+    return ok(rows.map((r) => ({
+      ...r,
+      from: db.users.find((u) => u.id === r.fromId)?.username || "",
+      owner: "",
+      label: r.reason,
+      gone: false,
+    })));
+  }
+
+  if (method === "post" && path.startsWith("/api/admin/reports/") && path.endsWith("/resolve")) {
+    const me = requireUser(config, db);
+    if (me.role !== "admin") fail("İcazə yoxdur", 403);
+    const id = path.split("/")[4];
+    const report = db.reports.find((r) => r.id === id);
+    if (!report) fail("Şikayət tapılmadı", 404);
+    if (report.status !== "open") fail("Şikayət artıq bağlanıb", 400);
+    const action = String(body.action || "").toLowerCase();
+    if (!["dismissed", "remove", "ban"].includes(action)) fail("Əməliyyat tanınmır", 400);
+    const stamp = nowIso();
+    const touch = (row, status) => {
+      row.status = status;
+      row.updatedAt = stamp;
+    };
+    if (action === "dismissed") touch(report, "dismissed");
+    else {
+      db.reports
+        .filter((r) => r.status === "open" && r.targetType === report.targetType && r.targetId === report.targetId)
+        .forEach((r) => touch(r, action));
+    }
+    const pushNote = (userId, type, text) => {
+      if (!userId) return;
+      db.notifications = db.notifications || [];
+      db.notifications.unshift({
+        id: uid("nt"),
+        userId,
+        fromId: null,
+        type,
+        entityId: report.id,
+        text,
+        read: false,
+        createdAt: stamp,
+      });
+    };
+    const reporterText = action === "dismissed"
+      ? "Şikayətinə baxıldı. Qayda pozuntusu tapılmadı."
+      : action === "remove"
+        ? "Şikayətinə baxıldı. Uyğunsuz kontent götürüldü."
+        : "Şikayətinə baxıldı. Hesab məhdudlaşdırıldı.";
+    pushNote(report.fromId, "report", reporterText);
+    if (action === "remove" || action === "ban") {
+      const owner = db.users.find((u) => u.id === report.targetId)
+        || db.posts.find((p) => p.id === report.targetId)?.userId
+        || db.reels?.find((r) => r.id === report.targetId)?.userId;
+      const ownerId = typeof owner === "string" ? owner : owner?.id;
+      if (ownerId && ownerId !== report.fromId) {
+        pushNote(ownerId, "moderation", action === "remove"
+          ? "Paylaşımın qaydalarımıza uyğun olmadığı üçün götürüldü."
+          : "Hesabın məhdudlaşdırıldı.");
+      }
+    }
+    saveDb(db);
+    return ok({ id: report.id, status: report.status });
   }
 
   fail("Endpoint tapılmadı", 404);

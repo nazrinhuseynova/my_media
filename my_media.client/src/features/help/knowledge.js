@@ -7,6 +7,7 @@ export const CHIPS = {
   reportComment: "Şərhi necə şikayət edim?",
   reportUser: "Hesabı necə şikayət edim?",
   reportAfter: "Şikayətdən sonra nə olur?",
+  reportStatus: "Şikayətimin statusu nədir?",
   settings: "Ayarlar haradadır?",
   password: "Şifrəni necə dəyişim?",
   language: "Dili necə dəyişim?",
@@ -53,8 +54,8 @@ export const ENTRIES = [
   {
     id: "report",
     keys: ["sikayet", "report", "sikayet et", "pozuntu", "spam", "uygunsuz", "complaint"],
-    text: "Şikayət həmin kontentin özündən gedir. Postda, reeldə, başqasının şərhində, başqasının hekayəsində və profildə «Şikayət» düyməsi var. Öz kontentini və admin hesabını şikayət etmək olmur. Eyni şey üçün açıq şikayətin varsa, ikincisi növbəyə düşmür.",
-    next: ["reportPost", "reportReel", "reportStory", "reportComment", "reportUser", "reportAfter"],
+    text: "Şikayət həmin kontentin özündən gedir. Postda, reeldə, başqasının şərhində, başqasının hekayəsində və profildə «Şikayət» düyməsi var. Öz kontentini və admin hesabını şikayət etmək olmur. Eyni şey üçün açıq şikayətin varsa, ikincisi növbəyə düşmür. Statusunu buradan soruşa, qərarı isə Bildirişlərdə görə bilərsən.",
+    next: ["reportPost", "reportReel", "reportStory", "reportComment", "reportUser", "reportAfter", "reportStatus"],
   },
   {
     id: "reportPost",
@@ -91,9 +92,18 @@ export const ENTRIES = [
   },
   {
     id: "reportAfter",
-    keys: ["sikayetden sonra", "sikayet ne olur", "novbe", "baxilirmi", "report status", "cavab gelirmi"],
-    text: "Şikayət açıq növbəyə düşür. Nəzarət onu rədd edə, kontenti götürə və ya hesabı 7 gün, 30 gün yaxud həmişəlik bloklaya bilər. Sənə ayrıca bir izləmə səhifəsi açılmır. Eyni hədəf bağlananda onun açıq şikayətləri birlikdə bağlanır.",
-    next: ["report", "block", "safety"],
+    keys: ["sikayetden sonra", "sikayet ne olur", "novbe", "baxilirmi", "cavab gelirmi"],
+    text: "Şikayət göndəriləndə təsdiq görürsən və o, nəzarət növbəsinə düşür — Instagram və TikTok-dakı kimi. Nəzarət rədd edə, kontenti götürə və ya hesabı 1 gün, 7 gün, 30 gün yaxud həmişəlik məhdudlaşdıra bilər. Qərar Bildirişlərdə görünür: sənə şikayətin nəticəsi, kontent sahibinə isə (kim şikayət etdiyini demədən) məhdudiyyət xəbəri gedir. Eyni hədəfin açıq şikayətləri birlikdə bağlanır.",
+    ...link("notifications"),
+    next: ["reportStatus", "report", "notify"],
+  },
+  {
+    id: "reportStatus",
+    keys: ["sikayetimin statusu", "sikayet status", "report status", "sikayetim ne oldu", "sikayetlerim", "menim sikayetim", "statusum"],
+    text: "Son şikayətlərinin statusunu indi yoxlayıram.",
+    live: "reports",
+    ...link("notifications"),
+    next: ["reportAfter", "report", "notify"],
   },
   {
     id: "settings",
@@ -131,9 +141,9 @@ export const ENTRIES = [
   {
     id: "notify",
     keys: ["bildiris", "notification", "xeber", "zeng", "sazla bildiris"],
-    text: "Bildirişlər ayrıca səhifədədir. Hansının gələcəyini Ayarlar bölməsində seçirsən: bəyənmə, şərh, izləmə, işarə və mesaj.",
+    text: "Bildirişlər ayrıca səhifədədir. Bəyənmə, şərh, izləmə, işarə, mesaj və şikayət/nəzarət qərarları ora düşür. Hansı sosial bildirişlərin gələcəyini Ayarlarda seçirsən; şikayət qərarı həmişə gəlir.",
     ...link("notifications"),
-    next: ["settings", "direct"],
+    next: ["reportStatus", "settings", "direct"],
   },
   {
     id: "accounts",
@@ -233,7 +243,7 @@ export function starterChips(path) {
   if (path.startsWith("/search") || path.startsWith("/explore")) return ["search", "post", "report"];
   if (path.startsWith("/profile")) return ["profile", "reportUser", "block", "private"];
   if (path.startsWith("/saved") || path.startsWith("/archive") || path.startsWith("/drafts") || path.startsWith("/liked")) return ["save", "post", "settings"];
-  return ["report", "settings", "post", "story", "safety"];
+  return ["report", "reportStatus", "settings", "post", "safety"];
 }
 
 export function chipsOf(ids) {

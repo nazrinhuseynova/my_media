@@ -1005,6 +1005,28 @@ public class PostsController : ControllerBase
         return Ok(new { message = "Sikayet gonderildi" });
     }
 
+    [HttpGet("/api/reports/mine")]
+    public async Task<IActionResult> MyReports()
+    {
+        var me = DtoMapper.GetUserId(User);
+        var list = await _db.Reports.AsNoTracking()
+            .Where(r => r.FromId == me)
+            .OrderByDescending(r => r.CreatedAt)
+            .Take(30)
+            .Select(r => new
+            {
+                id = r.Id.ToString(),
+                targetType = r.TargetType,
+                targetId = r.TargetId,
+                reason = r.Reason,
+                status = r.Status,
+                createdAt = r.CreatedAt,
+                updatedAt = r.UpdatedAt
+            })
+            .ToListAsync();
+        return Ok(list);
+    }
+
     private static object MapComment(Comment c, Guid? me)
     {
         var reactions = DtoMapper.SummarizeReactions(c.Likes, me);
