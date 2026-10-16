@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../../../services/api";
 import Modal from "../../../components/ui/Modal";
 import Button from "../../../components/ui/Button";
@@ -39,18 +40,34 @@ export default function HighlightRail({ highlights, isMe, onChanged }) {
   const showRow = isMe || highlights.length > 0;
 
   useEffect(() => {
-    if (!viewer) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    if (!viewer) return undefined;
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtmlOverflow = html.style.overflow;
+    const prevBodyOverflow = body.style.overflow;
+    const prevTouch = body.style.touchAction;
+    html.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    body.style.touchAction = "none";
     function onKey(e) {
       if (e.key === "Escape") setViewer(null);
       if (e.key === "ArrowRight") setViewerIndex((i) => Math.min(i + 1, (viewer.items?.length || 1) - 1));
       if (e.key === "ArrowLeft") setViewerIndex((i) => Math.max(i - 1, 0));
     }
+    function blockScroll(e) {
+      if (e.target instanceof Element && e.target.closest(".hl-viewer-stage")) return;
+      e.preventDefault();
+    }
     window.addEventListener("keydown", onKey);
+    window.addEventListener("wheel", blockScroll, { passive: false });
+    window.addEventListener("touchmove", blockScroll, { passive: false });
     return () => {
-      document.body.style.overflow = prev;
+      html.style.overflow = prevHtmlOverflow;
+      body.style.overflow = prevBodyOverflow;
+      body.style.touchAction = prevTouch;
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("wheel", blockScroll);
+      window.removeEventListener("touchmove", blockScroll);
     };
   }, [viewer]);
 
@@ -83,6 +100,7 @@ export default function HighlightRail({ highlights, isMe, onChanged }) {
     setName(h.name);
     setCoverUrl(coverOf(h));
     setManageOpen(false);
+    setViewer(null);
     setCreateOpen(true);
     loadArchive();
   }
@@ -227,7 +245,7 @@ export default function HighlightRail({ highlights, isMe, onChanged }) {
     setBusy(true);
     try {
       await api.delete(`/api/highlights/${editTarget.id}`);
-      notify("Highlight silindi");
+      notify("Silindi");
       setManageOpen(false);
       setViewer(null);
       setEditTarget(null);
@@ -278,79 +296,131 @@ export default function HighlightRail({ highlights, isMe, onChanged }) {
         ))}
       </div>
 
-      {viewer && current ? (
-        <div className="hl-viewer" role="dialog" aria-modal="true">
-          <div className="hl-viewer-stage">
-            {current.mediaType === "video" ? (
-              <video className="hl-viewer-bg" src={current.mediaUrl} autoPlay playsInline muted={false} />
-            ) : (
-              <img className="hl-viewer-bg" src={current.mediaUrl} alt="" />
-            )}
-            <div className="hl-viewer-shade" />
-            <div className="hl-viewer-ui">
-              <div className="hl-viewer-progress">
-                {(viewer.items || []).map((item, i) => (
-                  <span key={item.id} className={i < viewerIndex ? "done" : i === viewerIndex ? "on" : ""} />
-                ))}
-              </div>
-              <div className="hl-viewer-head">
-                <div className="hl-viewer-who">
-                  <span className="hl-viewer-cover">
-                    {coverOf(viewer) ? <img src={coverOf(viewer)} alt="" /> : null}
-                  </span>
-                  <strong>{viewer.name}</strong>
+      {viewer && current
+        ? createPortal(
+          <div className="hl-viewer" role="dialog" aria-modal="true">
+            <div className="hl-viewer-stage">
+              {current.mediaType === "video" ? (
+                <video className="hl-viewer-bg" src={current.mediaUrl} autoPlay playsInline muted={false} />
+              ) : (
+                <img className="hl-viewer-bg" src={current.mediaUrl} alt="" />
+              )}
+              <div className="hl-viewer-shade" />
+              <div className="hl-viewer-ui">
+                <div className="hl-viewer-progress">
+                  {(viewer.items || []).map((item, i) => (
+                    <span key={item.id} className={i < viewerIndex ? "done" : i === viewerIndex ? "on" : ""} />
+                  ))}
                 </div>
-                <div className="hl-viewer-actions">
-                  {isMe ? (
-                    <button
-                      type="button"
-                      className="hl-icon-btn"
-                      aria-label="Daha çox"
-                      onClick={() => openManage(viewer)}
-                    >
+                <div className="hl-viewer-head">
+                  <div className="hl-viewer-who">
+                    <span className="hl-viewer-cover">
+                      {coverOf(viewer) ? <img src={coverOf(viewer)} alt="" /> : null}
+                    </span>
+                    <strong>{viewer.name}</strong>
+                  </div>
+                  <div className="hl-viewer-actions">
+                    {isMe ? (
+                      <button
+                        type="button"
+                        className="hl-icon-btn"
+                        aria-label="Daha çox"
+                        onClick={() => openManage(viewer)}
+                      >
+                        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                          <circle cx="12" cy="5" r="1.6" fill="currentColor" />
+                          <circle cx="12" cy="12" r="1.6" fill="currentColor" />
+                          <circle cx="12" cy="19" r="1.6" fill="currentColor" />
+                        </svg>
+                      </button>
+                    ) : null}
+                    <button type="button" className="hl-icon-btn" aria-label="Bağla" onClick={() => setViewer(null)}>
                       <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-                        <circle cx="12" cy="5" r="1.6" fill="currentColor" />
-                        <circle cx="12" cy="12" r="1.6" fill="currentColor" />
-                        <circle cx="12" cy="19" r="1.6" fill="currentColor" />
+                        <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                       </svg>
                     </button>
-                  ) : null}
-                  <button type="button" className="hl-icon-btn" aria-label="Bağla" onClick={() => setViewer(null)}>
-                    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-                      <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                    </svg>
-                  </button>
+                  </div>
                 </div>
+                {current.text ? <p className="hl-viewer-text">{current.text}</p> : null}
               </div>
-              {current.text ? <p className="hl-viewer-text">{current.text}</p> : null}
+              <button
+                type="button"
+                className="hl-hit hl-hit-prev"
+                aria-label="Əvvəlki"
+                onClick={() => {
+                  if (viewerIndex > 0) setViewerIndex((i) => i - 1);
+                  else setViewer(null);
+                }}
+              />
+              <button
+                type="button"
+                className="hl-hit hl-hit-next"
+                aria-label="Növbəti"
+                onClick={() => {
+                  if (viewerIndex < (viewer.items?.length || 1) - 1) setViewerIndex((i) => i + 1);
+                  else setViewer(null);
+                }}
+              />
+
+              {manageOpen ? (
+                <div className="hl-pop" onClick={() => !busy && setManageOpen(false)}>
+                  <div className="hl-pop-card" role="dialog" aria-label="Redaktə" onClick={(e) => e.stopPropagation()}>
+                    <h3>{editTarget?.name || "Redaktə"}</h3>
+                    <div className="hl-manage">
+                      <button type="button" onClick={() => { setRenameValue(editTarget?.name || ""); setRenameOpen(true); }}>Adı dəyiş</button>
+                      <button type="button" onClick={() => openAdd(editTarget)}>Hekayə əlavə et</button>
+                      <button type="button" onClick={() => setCoverPickOpen(true)}>Qapaq / hekayə sil</button>
+                      <button type="button" className="is-danger" onClick={deleteHighlight}>Sil</button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {renameOpen ? (
+                <div className="hl-pop" onClick={() => !busy && setRenameOpen(false)}>
+                  <div className="hl-pop-card" role="dialog" aria-label="Adı dəyiş" onClick={(e) => e.stopPropagation()}>
+                    <h3>Adı dəyiş</h3>
+                    <label className="hl-field">
+                      <span>Yeni ad</span>
+                      <input value={renameValue} maxLength={40} onChange={(e) => setRenameValue(e.target.value)} />
+                    </label>
+                    <div className="hl-form-actions">
+                      <Button variant="ghost" type="button" onClick={() => setRenameOpen(false)}>Ləğv</Button>
+                      <Button type="button" disabled={busy || !renameValue.trim()} onClick={rename}>Saxla</Button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {coverPickOpen ? (
+                <div className="hl-pop" onClick={() => !busy && setCoverPickOpen(false)}>
+                  <div className="hl-pop-card hl-pop-wide" role="dialog" aria-label="Hekayələr" onClick={(e) => e.stopPropagation()}>
+                    <h3>Hekayələr</h3>
+                    <div className="hl-pick-grid">
+                      {(editTarget?.items || []).map((item) => (
+                        <div key={item.id} className="hl-pick-tile hl-pick-manage">
+                          {item.mediaType === "video" ? <video src={item.mediaUrl} muted preload="metadata" /> : <img src={item.mediaUrl} alt="" />}
+                          <div className="hl-pick-tools">
+                            <button type="button" disabled={busy} onClick={() => setCover(item.mediaUrl)}>Qapaq</button>
+                            <button type="button" className="is-danger" disabled={busy} onClick={() => removeItem(item.id)}>Sil</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
-            <button
-              type="button"
-              className="hl-hit hl-hit-prev"
-              aria-label="Əvvəlki"
-              onClick={() => {
-                if (viewerIndex > 0) setViewerIndex((i) => i - 1);
-                else setViewer(null);
-              }}
-            />
-            <button
-              type="button"
-              className="hl-hit hl-hit-next"
-              aria-label="Növbəti"
-              onClick={() => {
-                if (viewerIndex < (viewer.items?.length || 1) - 1) setViewerIndex((i) => i + 1);
-                else setViewer(null);
-              }}
-            />
-          </div>
-        </div>
-      ) : null}
+          </div>,
+          document.body
+        )
+        : null}
 
       <Modal
         open={createOpen}
         onClose={() => !busy && setCreateOpen(false)}
         title={mode === "add" ? "Hekayə əlavə et" : step === "pick" ? "Hekayə seç" : "Highlight yarat"}
-        from="bottom"
+        soft
       >
         {step === "pick" ? (
           <>
@@ -409,39 +479,42 @@ export default function HighlightRail({ highlights, isMe, onChanged }) {
         )}
       </Modal>
 
-      <Modal open={manageOpen} onClose={() => !busy && setManageOpen(false)} title={editTarget?.name || "Redaktə"} from="bottom">
-        <div className="hl-manage">
-          <button type="button" onClick={() => { setRenameValue(editTarget?.name || ""); setRenameOpen(true); }}>Adı dəyiş</button>
-          <button type="button" onClick={() => openAdd(editTarget)}>Hekayə əlavə et</button>
-          <button type="button" onClick={() => setCoverPickOpen(true)}>Qapaq / hekayə sil</button>
-          <button type="button" className="is-danger" onClick={deleteHighlight}>Highlight-ı sil</button>
-        </div>
-      </Modal>
-
-      <Modal open={renameOpen} onClose={() => !busy && setRenameOpen(false)} title="Adı dəyiş">
-        <label className="hl-field">
-          <span>Yeni ad</span>
-          <input value={renameValue} maxLength={40} onChange={(e) => setRenameValue(e.target.value)} />
-        </label>
-        <div className="hl-form-actions">
-          <Button variant="ghost" type="button" onClick={() => setRenameOpen(false)}>Ləğv</Button>
-          <Button type="button" disabled={busy || !renameValue.trim()} onClick={rename}>Saxla</Button>
-        </div>
-      </Modal>
-
-      <Modal open={coverPickOpen} onClose={() => !busy && setCoverPickOpen(false)} title="Hekayələr" from="bottom">
-        <div className="hl-pick-grid">
-          {(editTarget?.items || []).map((item) => (
-            <div key={item.id} className="hl-pick-tile hl-pick-manage">
-              {item.mediaType === "video" ? <video src={item.mediaUrl} muted preload="metadata" /> : <img src={item.mediaUrl} alt="" />}
-              <div className="hl-pick-tools">
-                <button type="button" disabled={busy} onClick={() => setCover(item.mediaUrl)}>Qapaq</button>
-                <button type="button" className="is-danger" disabled={busy} onClick={() => removeItem(item.id)}>Sil</button>
-              </div>
+      {/* Viewer bağlı olanda (məs. sağ klik) — adi Modal */}
+      {!viewer ? (
+        <>
+          <Modal open={manageOpen} onClose={() => !busy && setManageOpen(false)} title={editTarget?.name || "Redaktə"} from="bottom">
+            <div className="hl-manage">
+              <button type="button" onClick={() => { setRenameValue(editTarget?.name || ""); setRenameOpen(true); }}>Adı dəyiş</button>
+              <button type="button" onClick={() => openAdd(editTarget)}>Hekayə əlavə et</button>
+              <button type="button" onClick={() => setCoverPickOpen(true)}>Qapaq / hekayə sil</button>
+              <button type="button" className="is-danger" onClick={deleteHighlight}>Sil</button>
             </div>
-          ))}
-        </div>
-      </Modal>
+          </Modal>
+          <Modal open={renameOpen} onClose={() => !busy && setRenameOpen(false)} title="Adı dəyiş">
+            <label className="hl-field">
+              <span>Yeni ad</span>
+              <input value={renameValue} maxLength={40} onChange={(e) => setRenameValue(e.target.value)} />
+            </label>
+            <div className="hl-form-actions">
+              <Button variant="ghost" type="button" onClick={() => setRenameOpen(false)}>Ləğv</Button>
+              <Button type="button" disabled={busy || !renameValue.trim()} onClick={rename}>Saxla</Button>
+            </div>
+          </Modal>
+          <Modal open={coverPickOpen} onClose={() => !busy && setCoverPickOpen(false)} title="Hekayələr" from="bottom">
+            <div className="hl-pick-grid">
+              {(editTarget?.items || []).map((item) => (
+                <div key={item.id} className="hl-pick-tile hl-pick-manage">
+                  {item.mediaType === "video" ? <video src={item.mediaUrl} muted preload="metadata" /> : <img src={item.mediaUrl} alt="" />}
+                  <div className="hl-pick-tools">
+                    <button type="button" disabled={busy} onClick={() => setCover(item.mediaUrl)}>Qapaq</button>
+                    <button type="button" className="is-danger" disabled={busy} onClick={() => removeItem(item.id)}>Sil</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Modal>
+        </>
+      ) : null}
     </>
   );
 }

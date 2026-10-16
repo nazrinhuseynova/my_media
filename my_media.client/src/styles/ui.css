@@ -138,6 +138,15 @@
   padding: 16px;
 }
 
+.modal-back-soft {
+  align-items: center;
+  justify-content: center;
+  padding: 16px 16px 22vh;
+  background: color-mix(in srgb, var(--text) 28%, transparent);
+  backdrop-filter: blur(10px) saturate(1.06);
+  -webkit-backdrop-filter: blur(10px) saturate(1.06);
+}
+
 .modal-back-sheet {
   align-items: flex-end;
   padding: 0;
@@ -5261,19 +5270,63 @@ a.admin-stat:hover {
   position: fixed;
   inset: 0;
   z-index: 120;
-  background: #000;
   display: flex;
   align-items: stretch;
   justify-content: center;
+  background: color-mix(in srgb, var(--text) 42%, transparent);
+  backdrop-filter: blur(14px) saturate(1.08);
+  -webkit-backdrop-filter: blur(14px) saturate(1.08);
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+/* Highlight stage-in aşağısından yuxarı açılan menyu */
+.hl-pop {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: flex-end;
+  justify-content: stretch;
+  padding: 0;
+  background: transparent;
+  touch-action: manipulation;
+}
+
+.hl-pop-card {
+  width: 100%;
+  max-height: 72%;
+  overflow: auto;
+  padding: 14px 14px calc(12px + env(safe-area-inset-bottom));
+  border-radius: 16px 16px 0 0;
+  background: var(--bg-elevated);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-bottom: 0;
+  box-shadow: 0 -12px 36px color-mix(in srgb, var(--text) 18%, transparent);
+  color: var(--text);
+  animation: sheet-up 0.22s ease;
+}
+
+.hl-pop-card h3 {
+  margin: 0 0 12px;
+  font-size: 17px;
+  font-weight: 750;
+}
+
+.hl-pop-wide {
+  width: 100%;
+  max-height: 78%;
 }
 
 .hl-viewer-stage {
   position: relative;
   width: 100%;
-  max-width: 480px;
+  max-width: 420px;
   height: 100%;
+  margin: 0 auto;
   background: #000;
   overflow: hidden;
+  touch-action: manipulation;
 }
 
 .hl-viewer-bg {
@@ -5429,13 +5482,18 @@ a.admin-stat:hover {
 
 @media (min-width: 720px) {
   .hl-viewer {
-    background: rgba(0, 0, 0, 0.92);
+    align-items: center;
+    padding: 20px 0;
+    background: color-mix(in srgb, var(--text) 36%, transparent);
   }
 
   .hl-viewer-stage {
-    max-width: 420px;
-    margin: 0 auto;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+    height: min(90dvh, 760px);
+    max-height: min(90dvh, 760px);
+    border-radius: 14px;
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--border) 70%, transparent),
+      0 28px 70px color-mix(in srgb, var(--text) 22%, transparent);
   }
 }
 
@@ -7036,15 +7094,26 @@ html.live-open body {
     box-shadow: var(--shadow);
   }
 
-  .modal-back:not(.modal-back-sheet) {
+  .modal-back:not(.modal-back-sheet):not(.modal-back-soft) {
     align-items: flex-end;
     padding: 0;
   }
 
-  .modal:not(.modal-sheet) {
+  .modal-back-soft {
+    align-items: center;
+    padding: 16px 16px 24vh;
+  }
+
+  .modal-back:not(.modal-back-sheet):not(.modal-back-soft) .modal:not(.modal-sheet) {
     width: 100%;
     max-height: min(92dvh, 100%);
     border-radius: 20px 20px 0 0;
+  }
+
+  .modal-back-soft .modal {
+    width: min(640px, 100%);
+    max-height: min(78dvh, 100%);
+    border-radius: 24px;
   }
 
   .chat-layout,
