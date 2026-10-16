@@ -199,22 +199,7 @@ public class AuthController : ControllerBase
 
         var email = identity.Email;
         var user = await _users.FindByEmailAsync(email);
-        if (user != null)
-        {
-            var current = string.IsNullOrWhiteSpace(user.Provider) ? "email" : user.Provider;
-            if (!current.Equals(provider, StringComparison.OrdinalIgnoreCase))
-            {
-                var via = current.ToLowerInvariant() switch
-                {
-                    "google" => "Google",
-                    "apple" => "Apple",
-                    "facebook" => "Facebook",
-                    _ => "şifrə"
-                };
-                return Conflict(new { message = $"Bu email artıq {via} ilə qeydiyyatdadır. Həmin üsulla daxil ol." });
-            }
-        }
-        else
+        if (user == null)
         {
             var baseName = MakeUserName(email);
             var username = baseName;
@@ -243,10 +228,23 @@ public class AuthController : ControllerBase
             var created = await _users.CreateAsync(user, Guid.NewGuid().ToString("N") + "aA1");
             if (!created.Succeeded)
             {
-                return BadRequest(new { message = IdentityMessage(created) });
+                // Email may already exist under a different lookup — sign into that account.
+                user = await _users.FindByEmailAsync(email);
+                if (user == null)
+                {
+                    return BadRequest(new { message = IdentityMessage(created) });
+                }
             }
+            else
+            {
+                await _users.AddToRoleAsync(user, "User");
+            }
+        }
 
-            await _users.AddToRoleAsync(user, "User");
+        if (!user.EmailConfirmed)
+        {
+            user.EmailConfirmed = true;
+            await _users.UpdateAsync(user);
         }
 
         var blocked = await CheckAccount(user);

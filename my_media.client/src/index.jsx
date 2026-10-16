@@ -5,8 +5,11 @@ import App from "./App";
 import { ThemeProvider } from "./providers/ThemeProvider";
 import LanguageRoot from "./features/i18n/LanguageRoot";
 import { useUiPrefs } from "./stores/useUiPrefs";
+import { captureGoogleRedirect } from "./features/auth/services/googleOAuth";
 import "./styles/variables.css";
 import "./styles/globals.css";
+
+captureGoogleRedirect();
 
 const prefs = useUiPrefs.getState();
 document.documentElement.dataset.motion = prefs.reduceMotion ? "reduce" : "normal";

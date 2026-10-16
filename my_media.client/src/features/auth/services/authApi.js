@@ -10,7 +10,6 @@ const GUEST_ERRORS = [
   [/istifadəçi adı və ya şifrə/i, "Incorrect username or password"],
   [/bu istifadəçi artıq mövcuddur/i, "This username is already taken"],
   [/bu email artıq istifadə olunur/i, "This email is already in use"],
-  [/ilə qeydiyyatdadır/i, "This email is already registered. Sign in the same way you created it."],
   [/admin ayrıca hesabdır/i, "Admin is a separate account and can't be opened from here"],
   [/bu üsulla daxil olmaq hazırda/i, "This sign-in method isn't available right now"],
   [/facebook ilə daxil olmaq hazırda/i, "Facebook sign-in isn't available right now"],

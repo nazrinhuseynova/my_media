@@ -1,10 +1,11 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import Input from "../../../components/ui/Input";
 import Button from "../../../components/ui/Button";
 import Avatar from "../../../components/ui/Avatar";
 import { validateLoginEn } from "../../../utils/validators";
 import { guestMessage } from "../../../features/auth/services/authApi";
+import { takeGoogleLoginResult } from "../../../features/auth/services/googleOAuth";
 import ProviderButtons from "../../../features/auth/components/ProviderButtons";
 import { readAccounts, revokeRefresh } from "../../../features/auth/accountVault";
 import { openHome, useAuthStore } from "../../../features/auth/store/useAuthStore";
@@ -90,6 +91,16 @@ export default function LoginPage() {
       setBusy(false);
     }
   }, [social, adding, navigate]);
+
+  useEffect(() => {
+    const result = takeGoogleLoginResult();
+    if (!result) return;
+    if (result.error) {
+      setFormError("Google sign-in didn't work");
+      return;
+    }
+    if (result.idToken) onToken("google", result.idToken);
+  }, [onToken]);
 
   async function resume(account) {
     setBusy(true);

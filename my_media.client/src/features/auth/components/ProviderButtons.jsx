@@ -2,6 +2,7 @@ import { useState } from "react";
 import Button from "../../../components/ui/Button";
 import { api } from "../../../services/api";
 import { guestMessage } from "../services/authApi";
+import { requestGoogleIdToken } from "../services/googleOAuth";
 
 function loadScript(src, id) {
   return new Promise((resolve, reject) => {
@@ -25,54 +26,6 @@ function loadScript(src, id) {
     };
     script.onerror = () => reject(new Error("Couldn't load the sign-in script. Check your connection"));
     document.body.appendChild(script);
-  });
-}
-
-function googleCredential(clientId) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const done = (ok, value) => {
-      if (settled) return;
-      settled = true;
-      if (ok) resolve(value);
-      else reject(value);
-    };
-    window.google.accounts.id.initialize({
-      client_id: clientId,
-      ux_mode: "popup",
-      auto_select: false,
-      cancel_on_tap_outside: true,
-      callback: (response) => {
-        if (response?.credential) done(true, response.credential);
-        else done(false, new Error("Google sign-in didn't work"));
-      },
-    });
-    window.google.accounts.id.prompt((note) => {
-      if (settled) return;
-      const skipped = note.isNotDisplayed() || note.isSkippedMoment();
-      if (!skipped) return;
-      const holder = document.createElement("div");
-      holder.style.cssText = "position:fixed;left:0;top:0;width:1px;height:1px;overflow:hidden";
-      document.body.appendChild(holder);
-      window.google.accounts.id.renderButton(holder, { type: "standard", size: "large", theme: "outline" });
-      window.setTimeout(() => {
-        const inner = holder.querySelector("[role='button']");
-        if (!inner) {
-          holder.remove();
-          done(false, new Error("Google sign-in didn't work"));
-          return;
-        }
-        const onFocus = () => {
-          window.setTimeout(() => {
-            window.removeEventListener("focus", onFocus);
-            holder.remove();
-            if (!settled) done(false, new Error("cancelled"));
-          }, 500);
-        };
-        window.addEventListener("focus", onFocus);
-        inner.click();
-      }, 40);
-    });
   });
 }
 
@@ -164,11 +117,8 @@ export default function ProviderButtons({ busy, divider, onToken, onError }) {
         onError(missingText(kind));
         return;
       }
-      if (kind === "google") {
-        await loadScript("https://accounts.google.com/gsi/client", "pulse-google-sdk");
-      }
       const token = kind === "google"
-        ? await googleCredential(clientId)
+        ? await requestGoogleIdToken(clientId)
         : kind === "apple"
           ? await appleCredential(clientId)
           : await facebookCredential(clientId);

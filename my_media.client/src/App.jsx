@@ -60,6 +60,7 @@ export default function App() {
     useEffect(() => {
         if (!intro) return;
         const { pathname, search } = window.location;
+        if (sessionStorage.getItem("pulse_google_id_token") || sessionStorage.getItem("pulse_google_pending")) return;
         if (pathname === "/login" && !new URLSearchParams(search).get("add")) {
             window.history.replaceState(null, "", "/");
         }

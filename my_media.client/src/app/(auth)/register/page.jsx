@@ -1,9 +1,10 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import Input from "../../../components/ui/Input";
 import Button from "../../../components/ui/Button";
 import { validateRegisterEn } from "../../../utils/validators";
 import { authApi, guestMessage } from "../../../features/auth/services/authApi";
+import { takeGoogleLoginResult } from "../../../features/auth/services/googleOAuth";
 import { openHome, useAuthStore } from "../../../features/auth/store/useAuthStore";
 import { rememberAccount } from "../../../features/auth/accountVault";
 import { armTour } from "../../../features/tour/tourFlag";
@@ -78,6 +79,16 @@ export default function RegisterPage() {
       setBusy(false);
     }
   }, [social, values.firstName, values.lastName, adding, navigate]);
+
+  useEffect(() => {
+    const result = takeGoogleLoginResult();
+    if (!result) return;
+    if (result.error) {
+      setFormError("Google sign-in didn't work");
+      return;
+    }
+    if (result.idToken) onToken("google", result.idToken);
+  }, [onToken]);
 
   return (
     <div className="auth-wrap auth-wrap-register" data-keep>
