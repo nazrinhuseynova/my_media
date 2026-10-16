@@ -155,15 +155,7 @@ public class PostsController : ControllerBase
 
         var likes = await _db.PostLikes.AsNoTracking()
             .Where(l => pageIds.Contains(l.PostId))
-            .Select(l => new
-            {
-                l.PostId,
-                l.UserId,
-                l.Reaction,
-                Username = l.User.UserName,
-                FullName = l.User.FullName,
-                Avatar = l.User.AvatarUrl
-            })
+            .Select(l => new { l.PostId, l.UserId, l.Reaction })
             .ToListAsync();
 
         var commentCounts = await _db.Comments.AsNoTracking()
@@ -237,8 +229,7 @@ public class PostsController : ControllerBase
             {
                 PostId = l.PostId,
                 UserId = l.UserId,
-                Reaction = l.Reaction,
-                User = new AppUser { Id = l.UserId, UserName = l.Username, FullName = l.FullName ?? "", AvatarUrl = l.Avatar }
+                Reaction = l.Reaction
             }).ToList();
             var reactions = DtoMapper.SummarizeReactions(postLikes, me);
             var pollOptions = options.Where(o => o.PostId == p.Id).ToList();
@@ -325,20 +316,22 @@ public class PostsController : ControllerBase
                 && (p.ScheduledAt == null || p.ScheduledAt <= now)
                 && !p.User.IsPrivate && !p.User.IsBanned && p.User.IsActive
                 && !hidden.Contains(p.UserId) && !muted.Contains(p.UserId));
-        var total = await query.CountAsync();
-        var ids = await query
+        var idPage = await query
             .OrderByDescending(p => p.CreatedAt)
             .Select(p => p.Id)
             .Skip((paging.Page - 1) * paging.PageSize)
-            .Take(paging.PageSize)
+            .Take(paging.PageSize + 1)
             .ToListAsync();
+        var hasMore = idPage.Count > paging.PageSize;
+        var ids = idPage.Take(paging.PageSize).ToList();
         var savedIds = me.HasValue && ids.Count > 0
             ? (await _db.SavedPosts.AsNoTracking().Where(s => s.UserId == me.Value && ids.Contains(s.PostId)).Select(s => s.PostId).ToListAsync()).ToHashSet()
             : new HashSet<Guid>();
         var items = ids.Count == 0
             ? new List<object>()
             : await LoadFeedCards(ids, me ?? Guid.Empty, savedIds);
-        return Ok(PagedResult<object>.Create(items, paging.Page, paging.PageSize, total));
+        var total = (paging.Page - 1) * paging.PageSize + items.Count + (hasMore ? 1 : 0);
+        return Ok(PagedResult<object>.Create(items, paging.Page, paging.PageSize, total, hasMore));
     }
 
     [HttpPost("/api/posts")]

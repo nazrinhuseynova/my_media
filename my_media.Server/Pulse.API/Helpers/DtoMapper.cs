@@ -109,7 +109,7 @@ public static class DtoMapper
         return roles.Contains("Admin") ? "admin" : "user";
     }
 
-    public static object MapPost(Post p, Guid? viewerId, AppDbContext db, HashSet<Guid>? savedIds = null)
+    public static object MapPost(Post p, Guid? viewerId, AppDbContext db, HashSet<Guid>? savedIds = null, int? commentCount = null)
     {
         var saved = savedIds != null && savedIds.Contains(p.Id);
         var reactions = SummarizeReactions(p.Likes, viewerId);
@@ -125,7 +125,7 @@ public static class DtoMapper
             mentions = string.IsNullOrWhiteSpace(p.Mentions) ? new List<string>() : p.Mentions.Split(',').ToList(),
             likes = p.Likes.Select(x => x.UserId.ToString()).ToList(),
             likeCount = reactions.ReactionCount,
-            commentCount = p.Comments.Count,
+            commentCount = commentCount ?? p.Comments?.Count ?? 0,
             liked = reactions.Liked,
             myReaction = reactions.MyReaction,
             reactionCount = reactions.ReactionCount,

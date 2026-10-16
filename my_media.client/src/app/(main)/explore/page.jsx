@@ -108,17 +108,20 @@ export default function ExplorePage() {
     Promise.all([
       api.get("/api/explore", { params: { page: 1, pageSize: 12 } }).catch(() => ({ items: [] })),
       api.get("/api/reels", { params: { page: 1, pageSize: 8 } }).catch(() => ({ items: [] })),
-      me?.username
-        ? api.get(`/api/users/${me.username}/following`).catch(() => [])
-        : Promise.resolve([]),
-    ]).then(([explore, reels, people]) => {
+    ]).then(([explore, reels]) => {
       if (!alive) return;
       more.current = { post: 1, reel: 1, postMore: !!explore?.hasMore, reelMore: !!(reels?.hasMore), busy: false };
       setClips(asVideos(explore?.items, reels?.items || reels));
-      setFollowed((Array.isArray(people) ? people : []).map((p) => String(p.id || "").toLowerCase()).filter(Boolean));
-    }).finally(() => {
+      if (alive) setReady(true);
+    }).catch(() => {
       if (alive) setReady(true);
     });
+    if (me?.username) {
+      api.get(`/api/users/${me.username}/following`).then((people) => {
+        if (!alive) return;
+        setFollowed((Array.isArray(people) ? people : []).map((p) => String(p.id || "").toLowerCase()).filter(Boolean));
+      }).catch(() => {});
+    }
     return () => {
       alive = false;
     };

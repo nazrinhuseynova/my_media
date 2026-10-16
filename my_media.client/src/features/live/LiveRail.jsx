@@ -24,26 +24,6 @@ const AUDIO = {
   sampleRate: { ideal: 48000 },
 };
 
-const VIDEO_TRIES = [
-  {
-    width: { ideal: 1280 },
-    height: { ideal: 720 },
-    frameRate: { ideal: 30 },
-    facingMode: { ideal: "user" },
-  },
-  {
-    width: { ideal: 1920 },
-    height: { ideal: 1080 },
-    frameRate: { ideal: 30 },
-    facingMode: { ideal: "user" },
-  },
-  {
-    width: { ideal: 1280 },
-    height: { ideal: 720 },
-  },
-  true,
-];
-
 const FLOAT_MAX = 7;
 const FLOAT_TEXT_MAX = 48;
 const CHAT_MAX = 80;
@@ -54,49 +34,28 @@ function clipText(text, max = FLOAT_TEXT_MAX) {
   return `${t.slice(0, Math.max(0, max - 1))}…`;
 }
 
-async function sharpenTracks(stream) {
-  const video = stream.getVideoTracks()[0];
-  if (video) {
-    try { video.contentHint = "detail"; } catch { /* ignore */ }
-    try {
-      await video.applyConstraints({
+async function openCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
         width: { ideal: 1280 },
         height: { ideal: 720 },
         frameRate: { ideal: 30 },
-      });
-    } catch { /* ignore */ }
-  }
-  const audio = stream.getAudioTracks()[0];
-  if (audio) {
-    try { audio.contentHint = "speech"; } catch { /* ignore */ }
-    try {
-      await audio.applyConstraints({
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        sampleRate: { ideal: 48000 },
-      });
-    } catch { /* ignore */ }
-  }
-}
-
-async function openCamera() {
-  let lastErr;
-  for (const video of VIDEO_TRIES) {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video, audio: AUDIO });
-      await sharpenTracks(stream);
-      return stream;
-    } catch (err) {
-      lastErr = err;
+        facingMode: { ideal: "user" },
+      },
+      audio: AUDIO,
+    });
+    const video = stream.getVideoTracks()[0];
+    if (video) {
+      try { video.contentHint = "detail"; } catch { /* ignore */ }
     }
-  }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    await sharpenTracks(stream);
+    const audio = stream.getAudioTracks()[0];
+    if (audio) {
+      try { audio.contentHint = "speech"; } catch { /* ignore */ }
+    }
     return stream;
-  } catch (err) {
-    throw lastErr || err;
+  } catch {
+    return navigator.mediaDevices.getUserMedia({ video: true, audio: true });
   }
 }
 
@@ -352,28 +311,8 @@ function LiveStage({ room, onClose, onRefresh }) {
         (data.people || []).forEach((p) => rememberName(p.id, p.username));
 
         if (!onSeat) {
-          await api.post(`/api/lives/${roomId}/watch`);
+          await api.post(`/api/lives/${roomId}/watch`).catch(() => {});
           if (dead) return;
-          data = await api.get(`/api/lives/${roomId}`);
-          if (dead) return;
-          setDetail((prev) => ({ ...prev, ...data, isHost: !!data.isHost, inSeat: !!data.inSeat }));
-          setViewers(Array.isArray(data.viewers) ? data.viewers : []);
-        }
-
-        if (onSeat || data.isHost) {
-          try {
-            ownedStream = await openCamera();
-            if (dead) {
-              ownedStream.getTracks().forEach((t) => t.stop());
-              return;
-            }
-            localRef.current = ownedStream;
-            setLocalStream(ownedStream);
-          } catch {
-            if (!dead) notify("Kamera və mikrofon icazəsi lazımdır", true);
-            if (!dead) onCloseRef.current?.();
-            return;
-          }
         }
 
         const hub = new signalR.HubConnectionBuilder()
@@ -382,6 +321,20 @@ function LiveStage({ room, onClose, onRefresh }) {
           .build();
         ownedHub = hub;
         hubRef.current = hub;
+        const pendingIce = new Map();
+
+        function queueIce(peerId, candidate) {
+          if (!pendingIce.has(peerId)) pendingIce.set(peerId, []);
+          pendingIce.get(peerId).push(candidate);
+        }
+
+        async function flushIce(pc, peerId) {
+          const queued = pendingIce.get(peerId) || [];
+          pendingIce.delete(peerId);
+          for (const candidate of queued) {
+            try { await pc.addIceCandidate(candidate); } catch { /* ignore */ }
+          }
+        }
 
         async function callPeer(connectionId, userId) {
           if (!connectionId || peersRef.current.has(connectionId)) return;
@@ -432,20 +385,30 @@ function LiveStage({ room, onClose, onRefresh }) {
             const parsed = JSON.parse(raw || "{}");
             if (kind === "offer") {
               await pc.setRemoteDescription(parsed);
+              await flushIce(pc, from);
               const answer = await pc.createAnswer();
               await pc.setLocalDescription(answer);
               await boostSender(pc);
               await hub.invoke("Signal", roomId, from, "answer", JSON.stringify(answer));
             } else if (kind === "answer") {
               await pc.setRemoteDescription(parsed);
+              await flushIce(pc, from);
               await boostSender(pc);
             } else if (kind === "ice") {
-              await pc.addIceCandidate(parsed);
+              if (!pc.remoteDescription) queueIce(from, parsed);
+              else await pc.addIceCandidate(parsed);
             }
           } catch {
             /* ignore */
           }
         }
+
+        hub.on("liveExistingPeers", (payload) => {
+          if (!localRef.current) return;
+          (payload?.peers || []).forEach((peer) => {
+            if (peer?.connectionId) callPeer(peer.connectionId, peer.userId);
+          });
+        });
 
         hub.on("livePeerJoined", (payload) => {
           if (payload?.username) rememberName(payload.userId, payload.username);
@@ -604,18 +567,48 @@ function LiveStage({ room, onClose, onRefresh }) {
           await answerPeer(from, payload.kind, payload.payload, payload.fromUserId);
         });
 
-        try {
-          await hub.start();
-          if (dead) return;
-          await hub.invoke("JoinLive", roomId);
-        } catch {
-          if (!dead) notify("Canlı bağlantı zəifdir, yenidən cəhd olunur…", true);
+        const needCamera = onSeat || data.isHost;
+        const cameraPromise = needCamera
+          ? openCamera().then((stream) => {
+            if (dead) {
+              stream.getTracks().forEach((t) => t.stop());
+              return null;
+            }
+            ownedStream = stream;
+            localRef.current = stream;
+            setLocalStream(stream);
+            return stream;
+          }).catch(() => {
+            if (!dead) notify("Kamera və mikrofon icazəsi lazımdır", true);
+            if (!dead) onCloseRef.current?.();
+            return null;
+          })
+          : Promise.resolve(null);
+
+        const hubStartPromise = (async () => {
           try {
             await hub.start();
-            if (!dead) await hub.invoke("JoinLive", roomId);
+            return true;
           } catch {
-            if (!dead) notify("Şərh/dəvət hələ qoşulmayıb, yayım davam edir", true);
+            if (!dead) notify("Canlı bağlantı zəifdir, yenidən cəhd olunur…", true);
+            try {
+              await hub.start();
+              return true;
+            } catch {
+              if (!dead) notify("Şərh/dəvət hələ qoşulmayıb, yayım davam edir", true);
+              return false;
+            }
           }
+        })();
+
+        const [stream, hubOk] = await Promise.all([cameraPromise, hubStartPromise]);
+        if (dead) return;
+        if (needCamera && !stream) return;
+
+        if (hubOk) {
+          try {
+            await hub.invoke("JoinLive", roomId);
+          } catch { /* ignore */ }
         }
 
         if (!dead) {

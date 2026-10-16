@@ -56,26 +56,32 @@ public class UsersController : ControllerBase
         var postQuery = _db.Posts.AsNoTracking().Where(p =>
             p.UserId == user.Id && !p.IsDeleted && !p.IsArchived && !p.IsDraft
             && (me == user.Id || p.ScheduledAt == null || p.ScheduledAt <= now));
-        var postTotal = canSee ? await postQuery.CountAsync() : 0;
-        var postIds = canSee
+        var idPage = canSee
             ? await postQuery
                 .OrderByDescending(p => p.IsPinned)
                 .ThenByDescending(p => p.ScheduledAt ?? p.CreatedAt)
                 .Skip((paging.Page - 1) * paging.PageSize)
-                .Take(paging.PageSize)
+                .Take(paging.PageSize + 1)
                 .Select(p => p.Id)
                 .ToListAsync()
             : new List<Guid>();
+        var hasMorePosts = idPage.Count > paging.PageSize;
+        var postIds = idPage.Take(paging.PageSize).ToList();
         var posts = postIds.Count == 0
             ? new List<Post>()
             : await _db.Posts.AsNoTracking().AsSplitQuery()
-                .Include(p => p.User).Include(p => p.Media).Include(p => p.Likes).ThenInclude(l => l.User).Include(p => p.Comments)
+                .Include(p => p.User).Include(p => p.Media).Include(p => p.Likes)
                 .Include(p => p.Tags).ThenInclude(t => t.User)
                 .Include(p => p.PollOptions).ThenInclude(o => o.Votes)
                 .Where(p => postIds.Contains(p.Id))
                 .ToListAsync();
         var rank = postIds.Select((id, index) => (id, index)).ToDictionary(x => x.id, x => x.index);
         posts = posts.OrderBy(p => rank[p.Id]).ToList();
+        var commentCounts = postIds.Count == 0
+            ? new Dictionary<Guid, int>()
+            : await _db.Comments.AsNoTracking().Where(c => postIds.Contains(c.PostId))
+                .GroupBy(c => c.PostId).Select(g => new { Id = g.Key, Count = g.Count() })
+                .ToDictionaryAsync(x => x.Id, x => x.Count);
         if (canSee && me.HasValue && me != user.Id)
         {
             var sharesVisits = await _users.Users.Where(u => u.Id == me).Select(u => u.ProfileViewHistory).FirstOrDefaultAsync();
@@ -91,7 +97,6 @@ public class UsersController : ControllerBase
                 else seen.CreatedAt = DateTime.UtcNow;
                 await _db.SaveChangesAsync();
             }
-            await _db.ProfileViews.Where(v => v.CreatedAt < DateTime.UtcNow.AddDays(-7)).ExecuteDeleteAsync();
         }
 
         var relation = "none";
@@ -103,11 +108,13 @@ public class UsersController : ControllerBase
         var savedIds = me.HasValue && postIds.Count > 0
             ? (await _db.SavedPosts.AsNoTracking().Where(s => s.UserId == me.Value && postIds.Contains(s.PostId)).Select(s => s.PostId).ToListAsync()).ToHashSet()
             : new HashSet<Guid>();
+        var postTotal = canSee ? await postQuery.CountAsync() : 0;
         var postPage = PagedResult<object>.Create(
-            posts.Select(p => DtoMapper.MapPost(p, me, _db, savedIds)).ToList(),
+            posts.Select(p => DtoMapper.MapPost(p, me, _db, savedIds, commentCounts.GetValueOrDefault(p.Id))).ToList(),
             paging.Page,
             paging.PageSize,
-            postTotal);
+            postTotal,
+            hasMorePosts);
         var live = _presence.IsOnline(user.Id) || user.IsOnline;
         var presence = me.HasValue
             ? await PrivacyRules.PresenceForViewerAsync(_db, user, me.Value, live)

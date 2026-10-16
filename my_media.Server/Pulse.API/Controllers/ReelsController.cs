@@ -45,11 +45,10 @@ public class ReelsController : ControllerBase
         var query = _db.Reels.AsNoTracking()
             .Where(r => !r.IsDeleted && !hidden.Contains(r.UserId) && r.User.IsActive && !r.User.IsBanned
                 && (!r.User.IsPrivate || r.UserId == viewerId || followed.Contains(r.UserId)));
-        var total = await query.CountAsync();
-        var rows = await query
+        var pageRows = await query
             .OrderByDescending(r => r.CreatedAt)
             .Skip((paging.Page - 1) * paging.PageSize)
-            .Take(paging.PageSize)
+            .Take(paging.PageSize + 1)
             .Select(r => new
             {
                 r.Id,
@@ -60,8 +59,6 @@ public class ReelsController : ControllerBase
                 r.Music,
                 r.Effect,
                 r.CreatedAt,
-                LikeCount = r.Likes.Count(),
-                CommentCount = r.Comments.Count(),
                 Username = r.User.UserName,
                 FullName = r.User.FullName,
                 Avatar = r.User.AvatarUrl,
@@ -69,6 +66,8 @@ public class ReelsController : ControllerBase
                 IsOnline = r.User.IsOnline
             })
             .ToListAsync();
+        var hasMore = pageRows.Count > paging.PageSize;
+        var rows = pageRows.Take(paging.PageSize).ToList();
         if (focus.HasValue && rows.All(r => r.Id != focus.Value))
         {
             var extra = await query.Where(r => r.Id == focus.Value)
@@ -82,8 +81,6 @@ public class ReelsController : ControllerBase
                     r.Music,
                     r.Effect,
                     r.CreatedAt,
-                    LikeCount = r.Likes.Count(),
-                    CommentCount = r.Comments.Count(),
                     Username = r.User.UserName,
                     FullName = r.User.FullName,
                     Avatar = r.User.AvatarUrl,
@@ -94,6 +91,16 @@ public class ReelsController : ControllerBase
             if (extra != null) rows.Insert(0, extra);
         }
         var ids = rows.Select(r => r.Id).ToList();
+        var likeCounts = ids.Count == 0
+            ? new Dictionary<Guid, int>()
+            : await _db.ReelLikes.AsNoTracking().Where(l => ids.Contains(l.ReelId))
+                .GroupBy(l => l.ReelId).Select(g => new { Id = g.Key, Count = g.Count() })
+                .ToDictionaryAsync(x => x.Id, x => x.Count);
+        var commentCounts = ids.Count == 0
+            ? new Dictionary<Guid, int>()
+            : await _db.ReelComments.AsNoTracking().Where(c => ids.Contains(c.ReelId))
+                .GroupBy(c => c.ReelId).Select(g => new { Id = g.Key, Count = g.Count() })
+                .ToDictionaryAsync(x => x.Id, x => x.Count);
         var mine = me.HasValue && ids.Count > 0
             ? await _db.ReelLikes.AsNoTracking().Where(l => l.UserId == me && ids.Contains(l.ReelId)).ToListAsync()
             : new List<ReelLike>();
@@ -103,6 +110,7 @@ public class ReelsController : ControllerBase
         var items = rows.Select(r =>
         {
             var my = mine.FirstOrDefault(l => l.ReelId == r.Id);
+            var likeCount = likeCounts.GetValueOrDefault(r.Id);
             return (object)new
             {
                 id = r.Id.ToString(),
@@ -112,11 +120,11 @@ public class ReelsController : ControllerBase
                 caption = r.Caption,
                 music = r.Music,
                 effect = r.Effect,
-                likeCount = r.LikeCount,
-                commentCount = r.CommentCount,
+                likeCount,
+                commentCount = commentCounts.GetValueOrDefault(r.Id),
                 liked = my != null,
                 myReaction = my?.Reaction ?? "",
-                reactionCount = r.LikeCount,
+                reactionCount = likeCount,
                 saved = savedIds.Contains(r.Id),
                 createdAt = r.CreatedAt,
                 user = DtoMapper.MapUser(new AppUser
@@ -131,7 +139,8 @@ public class ReelsController : ControllerBase
                 })
             };
         }).ToList();
-        return Ok(PagedResult<object>.Create(items, paging.Page, paging.PageSize, total));
+        var total = (paging.Page - 1) * paging.PageSize + items.Count + (hasMore ? 1 : 0);
+        return Ok(PagedResult<object>.Create(items, paging.Page, paging.PageSize, total, hasMore));
     }
 
     [HttpPost("/api/reels")]

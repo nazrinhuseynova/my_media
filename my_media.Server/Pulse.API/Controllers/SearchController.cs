@@ -38,13 +38,13 @@ public class SearchController : ControllerBase
         var adminIds = (await _users.GetUsersInRoleAsync("Admin")).Select(a => a.Id).ToList();
         var userQuery = _users.Users
             .Where(u => u.IsActive && !u.IsBanned && !hidden.Contains(u.Id) && !adminIds.Contains(u.Id) && (u.UserName!.ToLower().Contains(q) || u.FullName.ToLower().Contains(q)));
-        var userTotal = await userQuery.CountAsync();
-        var users = await userQuery
+        var userPage = await userQuery
             .OrderBy(u => u.UserName)
             .Skip((paging.Page - 1) * paging.PageSize)
-            .Take(paging.PageSize)
+            .Take(paging.PageSize + 1)
             .ToListAsync();
-        var usersHasMore = paging.Page * paging.PageSize < userTotal;
+        var usersHasMore = userPage.Count > paging.PageSize;
+        var users = userPage.Take(paging.PageSize).ToList();
 
         var now = DateTime.UtcNow;
         var hashtags = (await _db.Posts.AsNoTracking()

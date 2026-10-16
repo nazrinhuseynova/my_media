@@ -88,6 +88,12 @@ public class LiveHub : Hub
             count = LivePresence.ViewerCount(id, hostId == Guid.Empty ? null : hostId)
         });
 
+        // Joiner (host/guest) mövcud peerlərə offer göndərsin — izləyici əvvəl giribsə video qalmasın.
+        await Clients.Caller.SendAsync("liveExistingPeers", new
+        {
+            roomId,
+            peers = LivePresence.OtherPeers(id, Context.ConnectionId)
+        });
         // Seat holders push their media to everyone (including pure viewers).
         await Clients.OthersInGroup(GroupName(id)).SendAsync("livePeerJoined", profile);
     }

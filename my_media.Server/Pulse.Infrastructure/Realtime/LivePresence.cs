@@ -50,6 +50,24 @@ public static class LivePresence
         return map.Keys.Count(id => id != excludeUserId.Value);
     }
 
+    /// <summary>Otaqdakı digər SignalR connection-lar (WebRTC offer üçün).</summary>
+    public static List<object> OtherPeers(Guid roomId, string excludeConnectionId)
+    {
+        if (!Viewers.TryGetValue(roomId, out var map)) return new List<object>();
+        var list = new List<object>();
+        foreach (var v in map.Values)
+        {
+            string[] connections;
+            lock (v.Connections) connections = v.Connections.ToArray();
+            foreach (var c in connections)
+            {
+                if (c == excludeConnectionId) continue;
+                list.Add(new { connectionId = c, userId = v.UserId.ToString(), username = v.Username });
+            }
+        }
+        return list;
+    }
+
     public static void UpsertViewer(Guid roomId, Guid userId, string connectionId, string username, string fullName, string avatar)
     {
         var map = RoomViewers(roomId);
