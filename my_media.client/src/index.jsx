@@ -11,6 +11,24 @@ import "./styles/globals.css";
 
 captureGoogleRedirect();
 
+/** Intro oynayacaqsa ünvanı / et — BrowserRouter /login ilə açılmasın. */
+try {
+    const skipIntro = sessionStorage.getItem("pulse_skip_intro") === "1";
+    const googleBusy = Boolean(
+        sessionStorage.getItem("pulse_google_id_token")
+        || sessionStorage.getItem("pulse_google_pending")
+    );
+    if (!skipIntro && !googleBusy) {
+        const { pathname, search } = window.location;
+        if (pathname === "/login" && !new URLSearchParams(search).get("add")) {
+            window.history.replaceState(null, "", "/");
+        }
+        sessionStorage.setItem("pulse_intro_playing", "1");
+    }
+} catch {
+    /* ignore */
+}
+
 const prefs = useUiPrefs.getState();
 document.documentElement.dataset.motion = prefs.reduceMotion ? "reduce" : "normal";
 document.documentElement.dataset.contrast = prefs.highContrast ? "high" : "normal";

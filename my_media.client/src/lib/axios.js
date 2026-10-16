@@ -85,8 +85,15 @@ http.interceptors.response.use(
       import("../features/auth/store/useAuthStore").then(({ useAuthStore }) => {
         useAuthStore.setState({ user: null, loading: false });
       });
+      let introPlaying = false;
+      try {
+        introPlaying = sessionStorage.getItem("pulse_intro_playing") === "1";
+      } catch {
+        /* ignore */
+      }
       const path = window.location.pathname;
-      if (!path.startsWith("/login") && !path.startsWith("/register") && !path.startsWith("/otp") && !path.startsWith("/forgot")) {
+      // Intro gedərkən /login-ə atma — intro bitəndə App özü /login açır
+      if (!introPlaying && !path.startsWith("/login") && !path.startsWith("/register") && !path.startsWith("/otp") && !path.startsWith("/forgot")) {
         window.location.assign("/login");
       }
     }

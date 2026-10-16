@@ -1,5 +1,5 @@
-﻿import { useEffect, useState } from "react";
-import { Route, Routes } from "react-router-dom";
+﻿import { useEffect, useLayoutEffect, useState } from "react";
+import { Route, Routes, useNavigate } from "react-router-dom";
 import "./styles/ui.css";
 import IntroSplash from "./features/intro/IntroSplash";
 import WelcomePage from "./features/intro/WelcomePage";
@@ -45,26 +45,79 @@ function shouldShowIntro() {
     return true;
 }
 
+function googleOAuthBusy() {
+    try {
+        return Boolean(
+            sessionStorage.getItem("pulse_google_id_token")
+            || sessionStorage.getItem("pulse_google_pending")
+        );
+    } catch {
+        return false;
+    }
+}
+
+function clearIntroPlaying() {
+    try {
+        sessionStorage.removeItem("pulse_intro_playing");
+    } catch {
+        /* ignore */
+    }
+}
+
 export default function App() {
     const [intro, setIntro] = useState(shouldShowIntro);
+    const navigate = useNavigate();
     const bootstrap = useAuthStore((s) => s.bootstrap);
     const user = useAuthStore((s) => s.user);
     const loadNotes = useNotificationStore((s) => s.load);
 
     // Giriş/qeydiyyatdan sonra (client navigate) intro-nu bağla
     useEffect(() => {
-        if (user && intro) setIntro(false);
+        if (user && intro) {
+            clearIntroPlaying();
+            setIntro(false);
+        }
     }, [user, intro]);
 
-    // Welcome/intro zamanı URL-də /login olmasın — yalnız login formasına keçəndə
+    // Intro boyu URL = / (login olmasın)
+    useLayoutEffect(() => {
+        if (!intro) return;
+        if (googleOAuthBusy()) return;
+        try {
+            sessionStorage.setItem("pulse_intro_playing", "1");
+        } catch {
+            /* ignore */
+        }
+        const { pathname, search } = window.location;
+        if (pathname === "/login" && !new URLSearchParams(search).get("add")) {
+            navigate("/", { replace: true });
+        }
+    }, [intro, navigate]);
+
+    // Intro zamanı kimsə /login-ə çəksə, geri /
     useEffect(() => {
         if (!intro) return;
-        const { pathname, search } = window.location;
-        if (sessionStorage.getItem("pulse_google_id_token") || sessionStorage.getItem("pulse_google_pending")) return;
-        if (pathname === "/login" && !new URLSearchParams(search).get("add")) {
-            window.history.replaceState(null, "", "/");
-        }
-    }, [intro]);
+        if (googleOAuthBusy()) return;
+        const keepRoot = () => {
+            const { pathname, search } = window.location;
+            if (pathname === "/login" && !new URLSearchParams(search).get("add")) {
+                navigate("/", { replace: true });
+            }
+        };
+        keepRoot();
+        const timer = window.setInterval(keepRoot, 200);
+        return () => window.clearInterval(timer);
+    }, [intro, navigate]);
+
+    function finishIntro() {
+        clearIntroPlaying();
+        setIntro(false);
+        if (useAuthStore.getState().user) return;
+        if (googleOAuthBusy()) return;
+        const { search } = window.location;
+        if (new URLSearchParams(search).get("add") === "1") return;
+        navigate("/login", { replace: true });
+    }
 
     useEffect(() => {
         bootstrap();
@@ -85,7 +138,7 @@ export default function App() {
 
     return (
         <>
-        {intro ? <IntroSplash onDone={() => setIntro(false)} /> : (
+        {intro ? <IntroSplash onDone={finishIntro} /> : (
         <Routes>
             <Route path="/welcome" element={<WelcomePage />} />
             <Route element={<AuthLayout />}>
