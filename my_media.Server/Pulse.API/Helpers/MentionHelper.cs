@@ -29,6 +29,7 @@ public static class MentionHelper
             var blocked = await db.Blocks.AnyAsync(b =>
                 (b.BlockerId == fromId && b.BlockedId == user.Id) || (b.BlockerId == user.Id && b.BlockedId == fromId));
             if (blocked) continue;
+            if (!await PrivacyRules.AllowsAsync(db, user, fromId, user.WhoCanMention)) continue;
             await notes.AddAsync(user.Id, fromId, "mention", entityId, message);
         }
     }

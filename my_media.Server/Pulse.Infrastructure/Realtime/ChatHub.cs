@@ -46,7 +46,10 @@ public class ChatHub : Hub
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        var id = GetUserId();
+        Guid id;
+        try { id = GetUserId(); }
+        catch { await base.OnDisconnectedAsync(exception); return; }
+
         var wentOffline = _presence.Disconnected(id, Context.ConnectionId);
         if (wentOffline)
         {

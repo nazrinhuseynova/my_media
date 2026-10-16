@@ -123,9 +123,7 @@ public class AuthController : ControllerBase
         }
         catch (InvalidOperationException)
         {
-            user.EmailConfirmed = true;
-            await _users.UpdateAsync(user);
-            return Ok(await BuildLogin(user, null));
+            return StatusCode(503, new { message = "Kod göndərilmədi. Bir az sonra yenidən cəhd et", needsOtp = true, userId = user.Id });
         }
         return Ok(new { message = "Kod emailinə göndərildi", userId = user.Id });
     }
@@ -161,8 +159,12 @@ public class AuthController : ControllerBase
             }
             catch (InvalidOperationException)
             {
-                user.EmailConfirmed = true;
-                await _users.UpdateAsync(user);
+                return StatusCode(503, new
+                {
+                    message = "Kod göndərilmədi. Bir az sonra yenidən cəhd et",
+                    needsOtp = true,
+                    userId = user.Id
+                });
             }
         }
 

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Pulse.API.Helpers;
 using Pulse.Application.Notifications.Interfaces;
@@ -18,13 +19,15 @@ public class AdminController : ControllerBase
     private readonly UserManager<AppUser> _users;
     private readonly PresenceTracker _presence;
     private readonly INotificationService _notes;
+    private readonly IHubContext<LiveHub> _liveHub;
 
-    public AdminController(AppDbContext db, UserManager<AppUser> users, PresenceTracker presence, INotificationService notes)
+    public AdminController(AppDbContext db, UserManager<AppUser> users, PresenceTracker presence, INotificationService notes, IHubContext<LiveHub> liveHub)
     {
         _db = db;
         _users = users;
         _presence = presence;
         _notes = notes;
+        _liveHub = liveHub;
     }
 
     [HttpGet("/api/admin/stats")]
@@ -491,6 +494,7 @@ public class AdminController : ControllerBase
         room.UpdatedAt = DateTime.UtcNow;
         LivePresence.ClearRoom(id);
         await _db.SaveChangesAsync();
+        await _liveHub.Clients.Group(LiveHub.GroupName(id)).SendAsync("liveEnded", new { roomId = id.ToString() });
         return Ok(new { id = id.ToString(), ended = true });
     }
 
@@ -586,6 +590,21 @@ public class AdminController : ControllerBase
                     var gone = await DeleteUser(targetId);
                     if (gone is not OkObjectResult) return gone;
                     return Ok(new { id = report.Id.ToString(), status = "remove" });
+                }
+            }
+            else if (report.TargetType == "live")
+            {
+                var room = await _db.LiveRooms.Include(r => r.Seats)
+                    .FirstOrDefaultAsync(r => r.Id == targetId);
+                var hostSeat = room?.Seats.OrderBy(s => s.SortOrder).FirstOrDefault();
+                ownerId = hostSeat?.UserId;
+                if (action == "remove" && room != null && room.EndedAt == null)
+                {
+                    room.EndedAt = DateTime.UtcNow;
+                    room.UpdatedAt = DateTime.UtcNow;
+                    LivePresence.ClearRoom(targetId);
+                    await _liveHub.Clients.Group(LiveHub.GroupName(targetId))
+                        .SendAsync("liveEnded", new { roomId = targetId.ToString() });
                 }
             }
         }

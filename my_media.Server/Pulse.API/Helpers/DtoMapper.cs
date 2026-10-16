@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using Pulse.Domain.Entities;
 using Pulse.Infrastructure.Persistence;
 
@@ -144,7 +145,7 @@ public static class DtoMapper
                 avatar = t.User.AvatarUrl
             }).ToList(),
             poll = MapPoll(p, viewerId),
-            repost = ShowNested(p.RepostOf, viewerId) ? new
+            repost = ShowNested(p.RepostOf, viewerId, db) ? new
             {
                 id = p.RepostOf!.Id.ToString(),
                 slug = p.RepostOf.Slug ?? "",
@@ -156,12 +157,17 @@ public static class DtoMapper
         };
     }
 
-    public static bool ShowNested(Post? source, Guid? viewerId)
+    public static bool ShowNested(Post? source, Guid? viewerId, AppDbContext? db = null)
     {
         if (source == null || source.IsDeleted || source.IsArchived || source.IsDraft) return false;
         if (source.User != null && (source.User.IsBanned || !source.User.IsActive)) return false;
         if (source.ScheduledAt != null && source.ScheduledAt > DateTime.UtcNow && viewerId != source.UserId) return false;
-        if (source.User?.IsPrivate == true && viewerId != source.UserId) return false;
+        if (source.User?.IsPrivate == true)
+        {
+            if (viewerId == source.UserId) return true;
+            if (!viewerId.HasValue || db == null) return false;
+            return db.Follows.AsNoTracking().Any(f => f.FollowerId == viewerId && f.FollowingId == source.UserId);
+        }
         return true;
     }
 

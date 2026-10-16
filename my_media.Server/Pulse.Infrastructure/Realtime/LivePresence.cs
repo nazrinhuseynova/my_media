@@ -50,6 +50,18 @@ public static class LivePresence
         return map.Keys.Count(id => id != excludeUserId.Value);
     }
 
+    public static bool IsInRoom(Guid roomId, Guid userId) =>
+        Viewers.TryGetValue(roomId, out var map) && map.ContainsKey(userId);
+
+    public static int MuteMinutesLeft(Guid roomId, Guid userId)
+    {
+        if (!Mutes.TryGetValue(roomId, out var map) || !map.TryGetValue(userId, out var until))
+            return 0;
+        if (until == DateTime.MaxValue) return 0;
+        var left = (int)Math.Ceiling((until - DateTime.UtcNow).TotalMinutes);
+        return Math.Max(0, left);
+    }
+
     /// <summary>Otaqdakı digər SignalR connection-lar (WebRTC offer üçün).</summary>
     public static List<object> OtherPeers(Guid roomId, string excludeConnectionId)
     {

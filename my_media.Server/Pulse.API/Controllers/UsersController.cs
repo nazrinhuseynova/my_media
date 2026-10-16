@@ -137,7 +137,7 @@ public class UsersController : ControllerBase
     public async Task<IActionResult> Followers(string username)
     {
         var user = await _users.Users.FirstOrDefaultAsync(u => u.UserName == username);
-        if (user == null) return NotFound();
+        if (user == null || await _users.IsInRoleAsync(user, "Admin")) return NotFound();
         if (!await CanListPeople(user)) return Ok(Array.Empty<object>());
         var ids = await _db.Follows.Where(f => f.FollowingId == user.Id).Select(f => f.FollowerId).ToListAsync();
         var list = await _users.Users.Where(u => ids.Contains(u.Id) && u.IsActive && !u.IsBanned).ToListAsync();
@@ -148,7 +148,7 @@ public class UsersController : ControllerBase
     public async Task<IActionResult> Following(string username)
     {
         var user = await _users.Users.FirstOrDefaultAsync(u => u.UserName == username);
-        if (user == null) return NotFound();
+        if (user == null || await _users.IsInRoleAsync(user, "Admin")) return NotFound();
         if (!await CanListPeople(user)) return Ok(Array.Empty<object>());
         var ids = await _db.Follows.Where(f => f.FollowerId == user.Id).Select(f => f.FollowingId).ToListAsync();
         var list = await _users.Users.Where(u => ids.Contains(u.Id) && u.IsActive && !u.IsBanned).ToListAsync();
@@ -338,8 +338,14 @@ public class UsersController : ControllerBase
     public async Task<IActionResult> Accept(Guid id)
     {
         var me = DtoMapper.GetUserId(User);
-        var req = await _db.FollowRequests.FirstOrDefaultAsync(r => r.Id == id && r.ToId == me && r.Status == "pending");
+        var req = await _db.FollowRequests.Include(r => r.From).FirstOrDefaultAsync(r => r.Id == id && r.ToId == me && r.Status == "pending");
         if (req == null) return NotFound();
+        if (req.From == null || !req.From.IsActive || req.From.IsBanned)
+        {
+            req.Status = "rejected";
+            await _db.SaveChangesAsync();
+            return StatusCode(403, new { message = "İstifadəçi tapılmadı" });
+        }
         if (await _db.Blocks.AnyAsync(b =>
                 (b.BlockerId == me && b.BlockedId == req.FromId) || (b.BlockerId == req.FromId && b.BlockedId == me)))
             return StatusCode(403, new { message = "Bu profil baglidir" });

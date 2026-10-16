@@ -104,9 +104,14 @@ public class LivesController : ControllerBase
                 host = s.SortOrder == 0,
                 sortOrder = s.SortOrder
             }).ToList();
+        var hostPerson = people.FirstOrDefault(p => p.host);
+        if (hostPerson != null && Guid.TryParse(hostPerson.id, out var hostId) && await _db.Blocks.AnyAsync(b =>
+                (b.BlockerId == me && b.BlockedId == hostId) || (b.BlockerId == hostId && b.BlockedId == me)))
+            return StatusCode(403, new { message = "Bu profil baglidir" });
+        if (LivePresence.IsKicked(id, me))
+            return StatusCode(403, new { message = "Bu yayımdan çıxarıldın" });
         var inSeat = people.Any(p => p.id == me.ToString());
         var isHost = people.Any(p => p.id == me.ToString() && p.host);
-        var hostPerson = people.FirstOrDefault(p => p.host);
         Guid? hostExclude = Guid.TryParse(hostPerson?.id, out var hid) ? hid : null;
         var requestIds = LivePresence.RequestIds(id);
         var requestUsers = await _db.Users.AsNoTracking()
@@ -125,7 +130,7 @@ public class LivesController : ControllerBase
             requests = requestUsers,
             isHost,
             inSeat,
-            inRoom = inSeat,
+            inRoom = inSeat || LivePresence.IsInRoom(id, me),
             invited = LivePresence.HasInvite(id, me),
             requested = LivePresence.HasRequest(id, me),
             muted = LivePresence.IsMuted(id, me),
@@ -252,6 +257,7 @@ public class LivesController : ControllerBase
     public async Task<IActionResult> AcceptInvite(Guid id)
     {
         var me = DtoMapper.GetUserId(User);
+        await using var tx = await _db.Database.BeginTransactionAsync();
         var room = await OpenRoom(id);
         if (room == null) return NotFound(new { message = "Canlı yayım bitib" });
         if (room.Seats.Any(s => s.UserId == me)) return Ok(new { id = room.Id.ToString(), joined = true, already = true });
@@ -271,6 +277,7 @@ public class LivesController : ControllerBase
         _db.LiveSeats.Add(new Pulse.Domain.Entities.LiveSeat { RoomId = room.Id, UserId = me, SortOrder = room.Seats.Count });
         LivePresence.ClearInvite(id, me);
         await _db.SaveChangesAsync();
+        await tx.CommitAsync();
         var guest = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == me);
         await _notes.AddAsync(host.UserId, me, "live_invite", id.ToString(), "canlı dəvətini qəbul etdi");
         await _hub.Clients.User(host.UserId.ToString()).SendAsync("liveInviteAccepted", new
@@ -317,6 +324,8 @@ public class LivesController : ControllerBase
     public async Task<IActionResult> Like(Guid id)
     {
         var me = DtoMapper.GetUserId(User);
+        if (!LivePresence.IsInRoom(id, me) || LivePresence.IsKicked(id, me))
+            return StatusCode(403, new { message = "Əvvəlcə yayıma qoşul" });
         var room = await _db.LiveRooms.Include(r => r.Seats).FirstOrDefaultAsync(r => r.Id == id && r.EndedAt == null);
         if (room == null) return NotFound(new { message = "Canlı yayım bitib" });
         if (room.Seats.Any(s => s.UserId == me && s.SortOrder == 0))
@@ -394,6 +403,17 @@ public class LivesController : ControllerBase
             return Ok(new { left = true, ended = true });
         }
         await _db.SaveChangesAsync();
+        await _hub.Clients.Group(LiveHub.GroupName(id)).SendAsync("livePeerForceLeft", new { roomId = id.ToString(), userId = me.ToString() });
+        await _hub.Clients.Group(LiveHub.GroupName(id)).SendAsync("liveActivity", new
+        {
+            roomId = id.ToString(),
+            kind = "seat",
+            userId = me.ToString(),
+            username = "",
+            text = "Qonaq kameradan çıxdı",
+            at = DateTime.UtcNow
+        });
+        await BroadcastViewers(id);
         return Ok(new { left = true, ended = false });
     }
 

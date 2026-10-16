@@ -124,8 +124,14 @@ public class StoriesController : ControllerBase
     public async Task<IActionResult> Reply(Guid id, [FromBody] StoryReplyBody body)
     {
         var me = DtoMapper.GetUserId(User);
-        var story = await _db.Stories.FirstOrDefaultAsync(s => s.Id == id);
+        var story = await _db.Stories.Include(s => s.User).FirstOrDefaultAsync(s => s.Id == id);
         if (story == null || !await CanSeeStory(story, me)) return NotFound();
+        if (story.UserId != me)
+        {
+            var owner = story.User ?? await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == story.UserId);
+            if (owner == null || !owner.AllowStoryReplies)
+                return StatusCode(403, new { message = "Bu hekayəyə cavab bağlıdır" });
+        }
         var text = (body.Text ?? "").Trim();
         if (text.Length == 0) return BadRequest(new { message = "Cavab yaz" });
         var reply = new StoryReply { StoryId = id, FromId = me, Text = text };

@@ -226,6 +226,7 @@ public class LiveHub : Hub
     {
         if (!Guid.TryParse(roomId, out var id)) return;
         var me = GetUserId();
+        if (!LivePresence.IsInRoom(id, me) || LivePresence.IsKicked(id, me)) return;
         var room = await _db.LiveRooms.Include(r => r.Seats).FirstOrDefaultAsync(r => r.Id == id && r.EndedAt == null);
         if (room == null) return;
         if (room.Seats.Any(s => s.UserId == me && s.SortOrder == 0))
@@ -264,6 +265,7 @@ public class LiveHub : Hub
     {
         if (!Guid.TryParse(roomId, out var id)) return;
         var me = GetUserId();
+        if (!LivePresence.IsInRoom(id, me) || LivePresence.IsKicked(id, me)) return;
         var since = DateTime.UtcNow.AddHours(-4);
         var alive = await _db.LiveRooms.AsNoTracking()
             .AnyAsync(r => r.Id == id && r.EndedAt == null && r.CreatedAt >= since);
@@ -282,13 +284,15 @@ public class LiveHub : Hub
 
     public async Task Signal(string roomId, string targetConnectionId, string kind, string payload)
     {
-        if (!Guid.TryParse(roomId, out _)) return;
+        if (!Guid.TryParse(roomId, out var id)) return;
         if (string.IsNullOrWhiteSpace(targetConnectionId) || string.IsNullOrWhiteSpace(kind)) return;
+        var me = GetUserId();
+        if (!LivePresence.IsInRoom(id, me) || LivePresence.IsKicked(id, me)) return;
         await Clients.Client(targetConnectionId).SendAsync("liveSignal", new
         {
             roomId,
             fromConnectionId = Context.ConnectionId,
-            fromUserId = GetUserId().ToString(),
+            fromUserId = me.ToString(),
             kind,
             payload
         });
@@ -297,11 +301,13 @@ public class LiveHub : Hub
     public async Task BroadcastSignal(string roomId, string kind, string payload)
     {
         if (!Guid.TryParse(roomId, out var id)) return;
+        var me = GetUserId();
+        if (!LivePresence.IsInRoom(id, me) || LivePresence.IsKicked(id, me)) return;
         await Clients.OthersInGroup(GroupName(id)).SendAsync("liveSignal", new
         {
             roomId,
             fromConnectionId = Context.ConnectionId,
-            fromUserId = GetUserId().ToString(),
+            fromUserId = me.ToString(),
             kind,
             payload
         });
@@ -314,14 +320,15 @@ public class LiveHub : Hub
         if (body.Length == 0) return;
         if (body.Length > 80) body = body[..80];
         var me = GetUserId();
-        if (LivePresence.IsKicked(id, me))
+        if (!LivePresence.IsInRoom(id, me) || LivePresence.IsKicked(id, me))
         {
-            await Clients.Caller.SendAsync("liveKicked", new { roomId, reason = "kick" });
+            if (LivePresence.IsKicked(id, me))
+                await Clients.Caller.SendAsync("liveKicked", new { roomId, reason = "kick" });
             return;
         }
         if (LivePresence.IsMuted(id, me))
         {
-            await Clients.Caller.SendAsync("liveMuted", new { roomId, minutes = 0 });
+            await Clients.Caller.SendAsync("liveMuted", new { roomId, minutes = LivePresence.MuteMinutesLeft(id, me) });
             return;
         }
         var user = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == me);

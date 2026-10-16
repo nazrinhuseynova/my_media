@@ -104,21 +104,16 @@ public class PostsController : ControllerBase
             .ToList();
         var hasMore = merged.Count > limit;
         var pageIds = merged.Take(limit).Select(p => p.Id).ToList();
-        var total = await _db.Posts.AsNoTracking()
-            .Where(p => !p.IsDeleted && !p.IsArchived && !p.IsDraft
-                && (p.ScheduledAt == null || p.ScheduledAt <= now)
-                && authors.Contains(p.UserId)
-                && p.User.IsActive && !p.User.IsBanned)
-            .CountAsync();
         if (pageIds.Count == 0)
-            return Ok(PagedResult<object>.Create(new List<object>(), page, limit, total, false));
+            return Ok(PagedResult<object>.Create(new List<object>(), page, limit, (page - 1) * limit, false));
 
         var savedIds = (await _db.SavedPosts.AsNoTracking()
             .Where(s => s.UserId == me && pageIds.Contains(s.PostId))
             .Select(s => s.PostId)
             .ToListAsync()).ToHashSet();
         var items = await LoadFeedCards(pageIds, me, savedIds);
-        return Ok(PagedResult<object>.Create(items, page, limit, Math.Max(total, (page - 1) * limit + items.Count), hasMore));
+        var total = (page - 1) * limit + items.Count + (hasMore ? 1 : 0);
+        return Ok(PagedResult<object>.Create(items, page, limit, total, hasMore));
     }
 
     private async Task<List<object>> LoadFeedCards(List<Guid> pageIds, Guid me, HashSet<Guid> savedIds)
@@ -211,9 +206,16 @@ public class PostsController : ControllerBase
                 .Select(m => new { m.PostId, m.Type, m.Url })
                 .ToListAsync();
             var now = DateTime.UtcNow;
+            var privateOwnerIds = rows.Where(p => p.IsPrivate && p.UserId != me).Select(p => p.UserId).Distinct().ToList();
+            var followedPrivate = privateOwnerIds.Count == 0
+                ? new HashSet<Guid>()
+                : (await _db.Follows.AsNoTracking()
+                    .Where(f => f.FollowerId == me && privateOwnerIds.Contains(f.FollowingId))
+                    .Select(f => f.FollowingId)
+                    .ToListAsync()).ToHashSet();
             reposts = rows.Where(p => !p.IsDeleted && !p.IsArchived && !p.IsDraft && p.Active && !p.Banned
                     && (p.ScheduledAt == null || p.ScheduledAt <= now || p.UserId == me)
-                    && (!p.IsPrivate || p.UserId == me))
+                    && (!p.IsPrivate || p.UserId == me || followedPrivate.Contains(p.UserId)))
                 .Select(p => (
                 p.Id,
                 p.Caption,
@@ -397,8 +399,9 @@ public class PostsController : ControllerBase
             foreach (var name in body.Tags.Select(x => x.Trim().TrimStart('@')).Where(x => x.Length > 0).Distinct())
             {
                 var tagged = await _db.Users.FirstOrDefaultAsync(u => u.UserName == name);
-                if (tagged != null && tagged.Id != me)
-                    post.Tags.Add(new PostTag { UserId = tagged.Id });
+                if (tagged == null || tagged.Id == me) continue;
+                if (!await PrivacyRules.AllowsAsync(_db, tagged, me, tagged.WhoCanTag)) continue;
+                post.Tags.Add(new PostTag { UserId = tagged.Id });
             }
         }
 
@@ -475,7 +478,7 @@ public class PostsController : ControllerBase
             ["isDraft"] = post.IsDraft,
             ["tags"] = post.Tags.Where(t => t.User != null).Select(t => new { id = t.UserId.ToString(), username = t.User.UserName, fullName = t.User.FullName, avatar = t.User.AvatarUrl }),
             ["poll"] = DtoMapper.MapPoll(post, me),
-            ["repost"] = DtoMapper.ShowNested(post.RepostOf, me) ? new
+            ["repost"] = DtoMapper.ShowNested(post.RepostOf, me, _db) ? new
             {
                 id = post.RepostOf!.Id.ToString(),
                 slug = post.RepostOf.Slug ?? "",
@@ -712,9 +715,14 @@ public class PostsController : ControllerBase
         var paging = Paging.Normalize(page, pageSize, 12, 24);
         var me = DtoMapper.GetUserId(User);
         var now = DateTime.UtcNow;
+        var hidden = await HiddenUserIds(me);
         var savedQuery = _db.SavedPosts.AsNoTracking().Where(x => x.UserId == me
             && _db.Posts.Any(p => p.Id == x.PostId && !p.IsDeleted && !p.IsArchived && !p.IsDraft
-                && (p.ScheduledAt == null || p.ScheduledAt <= now)));
+                && (p.ScheduledAt == null || p.ScheduledAt <= now)
+                && p.User.IsActive && !p.User.IsBanned
+                && !hidden.Contains(p.UserId)
+                && (p.UserId == me || !p.User.IsPrivate
+                    || _db.Follows.Any(f => f.FollowerId == me && f.FollowingId == p.UserId))));
         var total = await savedQuery.CountAsync();
         var ids = await savedQuery
             .OrderByDescending(x => x.CreatedAt)
@@ -748,9 +756,14 @@ public class PostsController : ControllerBase
         var paging = Paging.Normalize(page, pageSize, 12, 24);
         var me = DtoMapper.GetUserId(User);
         var now = DateTime.UtcNow;
+        var hidden = await HiddenUserIds(me);
         var likeQuery = _db.PostLikes.AsNoTracking().Where(x => x.UserId == me
             && _db.Posts.Any(p => p.Id == x.PostId && !p.IsDeleted && !p.IsArchived && !p.IsDraft
-                && (p.ScheduledAt == null || p.ScheduledAt <= now)));
+                && (p.ScheduledAt == null || p.ScheduledAt <= now)
+                && p.User.IsActive && !p.User.IsBanned
+                && !hidden.Contains(p.UserId)
+                && (p.UserId == me || !p.User.IsPrivate
+                    || _db.Follows.Any(f => f.FollowerId == me && f.FollowingId == p.UserId))));
         var postTotal = await likeQuery.CountAsync();
         var ids = await likeQuery
             .OrderByDescending(x => x.CreatedAt)
@@ -763,7 +776,11 @@ public class PostsController : ControllerBase
             : (await _db.SavedPosts.AsNoTracking().Where(s => s.UserId == me && ids.Contains(s.PostId)).Select(s => s.PostId).ToListAsync()).ToHashSet();
         var posts = await LoadFeedCards(ids, me, savedIds);
         var reelQuery = _db.ReelLikes.AsNoTracking().Where(l => l.UserId == me
-            && _db.Reels.Any(r => r.Id == l.ReelId && !r.IsDeleted));
+            && _db.Reels.Any(r => r.Id == l.ReelId && !r.IsDeleted
+                && r.User.IsActive && !r.User.IsBanned
+                && !hidden.Contains(r.UserId)
+                && (r.UserId == me || !r.User.IsPrivate
+                    || _db.Follows.Any(f => f.FollowerId == me && f.FollowingId == r.UserId))));
         var reelTotal = await reelQuery.Select(l => l.ReelId).Distinct().CountAsync();
         var reelIds = await reelQuery
             .GroupBy(l => l.ReelId)

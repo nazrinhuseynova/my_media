@@ -169,20 +169,27 @@ public class ConversationsController : ControllerBase
             .OrderBy(m => m.CreatedAt)
             .ToList();
 
+        var shareReceipts = await _db.Users.AsNoTracking()
+            .Where(u => u.Id == me)
+            .Select(u => u.ReadReceipts)
+            .FirstOrDefaultAsync();
         var marked = false;
-        foreach (var m in items)
+        if (shareReceipts)
         {
-            var parts = (m.ReadBy ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries).ToList();
-            if (!parts.Contains(me.ToString()))
+            foreach (var m in items)
             {
-                parts.Add(me.ToString());
-                m.ReadBy = string.Join(',', parts);
-                marked = true;
+                var parts = (m.ReadBy ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries).ToList();
+                if (!parts.Contains(me.ToString()))
+                {
+                    parts.Add(me.ToString());
+                    m.ReadBy = string.Join(',', parts);
+                    marked = true;
+                }
             }
+            await _db.SaveChangesAsync();
+            if (marked)
+                await _hub.Clients.Group(id.ToString()).SendAsync("messagesRead", new { conversationId = id.ToString(), userId = me.ToString() });
         }
-        await _db.SaveChangesAsync();
-        if (marked)
-            await _hub.Clients.Group(id.ToString()).SendAsync("messagesRead", new { conversationId = id.ToString(), userId = me.ToString() });
 
         var pageItems = items.Select(m => MapMessage(m, items)).ToList();
         return Ok(PagedResult<object>.Create(pageItems, paging.Page, paging.PageSize, total));
@@ -194,12 +201,18 @@ public class ConversationsController : ControllerBase
         var me = DtoMapper.GetUserId(User);
         var conv = await _db.Conversations.Include(c => c.Members).FirstOrDefaultAsync(c => c.Id == id);
         if (conv == null || conv.Members.All(m => m.UserId != me)) return NotFound();
-        if (!conv.IsGroup && await IsBlocked(me, conv.Members.Select(m => m.UserId)))
-            return StatusCode(403, new { message = "Bu profil baglidir" });
         var others = conv.Members.Select(m => m.UserId).Where(x => x != me).ToList();
-        if (await _db.Blocks.AnyAsync(b =>
-                (b.BlockerId == me && others.Contains(b.BlockedId)) || (b.BlockedId == me && others.Contains(b.BlockerId))))
-            return StatusCode(403, new { message = "Bu profil baglidir" });
+        if (!conv.IsGroup)
+        {
+            if (await IsBlocked(me, conv.Members.Select(m => m.UserId)))
+                return StatusCode(403, new { message = "Bu profil baglidir" });
+            if (await _db.Blocks.AnyAsync(b =>
+                    (b.BlockerId == me && others.Contains(b.BlockedId)) || (b.BlockedId == me && others.Contains(b.BlockerId))))
+                return StatusCode(403, new { message = "Bu profil baglidir" });
+            var target = await _db.Users.AsNoTracking().FirstOrDefaultAsync(u => others.Contains(u.Id));
+            if (target != null && !await PrivacyRules.AllowsAsync(_db, target, me, target.WhoCanMessage))
+                return StatusCode(403, new { message = $"@{target.UserName} mesaj qəbul etmir" });
+        }
         var type = (body.Type ?? "text").Trim().ToLowerInvariant();
         var allowed = new HashSet<string> { "text", "image", "video", "audio", "post", "reel", "location", "music", "status" };
         if (!allowed.Contains(type)) type = "text";
