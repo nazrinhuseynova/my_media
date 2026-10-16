@@ -222,6 +222,17 @@ public class ConversationsController : ControllerBase
             ? ("", "")
             : await StoredMedia.ResolveAsync(_files, body.MediaUrl, body.MediaExtension, folder);
         var shared = await SharedPost(me, body.SharedPostId);
+        if (shared == null && type == "status" && Guid.TryParse(body.SharedPostId, out var storyId))
+        {
+            var story = await _db.Stories.AsNoTracking().Include(s => s.User).FirstOrDefaultAsync(s => s.Id == storyId);
+            if (story == null) return BadRequest(new { message = "Hekayə tapılmadı" });
+            if (story.UserId != me && story.User != null && !story.User.AllowStorySharing)
+                return StatusCode(403, new { message = "Bu hekayəni paylaşmaq olmaz" });
+            if (story.UserId != me && await _db.Blocks.AnyAsync(b =>
+                    (b.BlockerId == me && b.BlockedId == story.UserId) || (b.BlockerId == story.UserId && b.BlockedId == me)))
+                return StatusCode(403, new { message = "Bu profil baglidir" });
+            shared = story.Id.ToString();
+        }
         if (text.Length == 0 && string.IsNullOrWhiteSpace(mediaUrl) && shared == null)
             return BadRequest(new { message = "Mesaj yaz" });
         if (type is "location" or "music" or "status" && text.Length == 0)
@@ -346,18 +357,32 @@ public class ConversationsController : ControllerBase
 
     private async Task<string?> SharedPost(Guid me, string? raw)
     {
-        if (!Guid.TryParse(raw, out var postId)) return null;
-        var post = await _db.Posts.AsNoTracking().Include(p => p.User).FirstOrDefaultAsync(p => p.Id == postId);
-        if (post == null || post.IsDeleted || post.IsArchived || post.IsDraft) return null;
-        if (post.ScheduledAt != null && post.ScheduledAt > DateTime.UtcNow && post.UserId != me) return null;
-        if (post.User != null && (post.User.IsBanned || !post.User.IsActive) && post.UserId != me) return null;
-        if (post.UserId != me && await _db.Blocks.AnyAsync(b =>
-                (b.BlockerId == me && b.BlockedId == post.UserId) || (b.BlockerId == post.UserId && b.BlockedId == me)))
+        if (!Guid.TryParse(raw, out var itemId)) return null;
+        var post = await _db.Posts.AsNoTracking().Include(p => p.User).FirstOrDefaultAsync(p => p.Id == itemId);
+        if (post != null)
+        {
+            if (post.IsDeleted || post.IsArchived || post.IsDraft) return null;
+            if (post.ScheduledAt != null && post.ScheduledAt > DateTime.UtcNow && post.UserId != me) return null;
+            if (post.User != null && (post.User.IsBanned || !post.User.IsActive) && post.UserId != me) return null;
+            if (post.UserId != me && await _db.Blocks.AnyAsync(b =>
+                    (b.BlockerId == me && b.BlockedId == post.UserId) || (b.BlockerId == post.UserId && b.BlockedId == me)))
+                return null;
+            if (post.User?.IsPrivate == true && post.UserId != me
+                && !await _db.Follows.AnyAsync(f => f.FollowerId == me && f.FollowingId == post.UserId))
+                return null;
+            return post.Id.ToString();
+        }
+
+        var reel = await _db.Reels.AsNoTracking().Include(r => r.User).FirstOrDefaultAsync(r => r.Id == itemId);
+        if (reel == null || reel.IsDeleted) return null;
+        if (reel.User != null && (reel.User.IsBanned || !reel.User.IsActive) && reel.UserId != me) return null;
+        if (reel.UserId != me && await _db.Blocks.AnyAsync(b =>
+                (b.BlockerId == me && b.BlockedId == reel.UserId) || (b.BlockerId == reel.UserId && b.BlockedId == me)))
             return null;
-        if (post.User?.IsPrivate == true && post.UserId != me
-            && !await _db.Follows.AnyAsync(f => f.FollowerId == me && f.FollowingId == post.UserId))
+        if (reel.User?.IsPrivate == true && reel.UserId != me
+            && !await _db.Follows.AnyAsync(f => f.FollowerId == me && f.FollowingId == reel.UserId))
             return null;
-        return post.Id.ToString();
+        return reel.Id.ToString();
     }
 
     private async Task<Guid?> ReplyInConversation(Guid conversationId, string? raw)

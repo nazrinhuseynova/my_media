@@ -3,11 +3,13 @@ import { api } from "../../../services/api";
 import { resolveMusic } from "../../../utils/upload";
 import { useAuthStore } from "../../auth/store/useAuthStore";
 import { useStoryStore } from "../store/useStoryStore";
+import { useAppStore } from "../../../stores/useAppStore";
 import Icon from "../../../components/ui/Icon";
 import { EmojiPad } from "../../comment/CommentThread";
 
 export default function StoryViewer({ groups, startIndex, onClose }) {
   const me = useAuthStore((s) => s.user);
+  const setShareTarget = useAppStore((s) => s.setShareTarget);
   const [gIdx, setGIdx] = useState(startIndex);
   const [index, setIndex] = useState(0);
   const [viewers, setViewers] = useState([]);
@@ -22,6 +24,8 @@ export default function StoryViewer({ groups, startIndex, onClose }) {
   const music = resolveMusic(story?.music);
   const hasPrev = gIdx > 0;
   const hasNext = gIdx < groups.length - 1;
+  const canReply = group?.user?.id === me?.id || group?.user?.allowStoryReplies !== false;
+  const canShare = group?.user?.id === me?.id || group?.user?.allowStorySharing !== false;
 
   useEffect(() => {
     if (!story) return;
@@ -139,6 +143,24 @@ export default function StoryViewer({ groups, startIndex, onClose }) {
             <strong>{group.user.username}</strong>
           </div>
           <div className="row" style={{ gap: 8 }}>
+            {canShare ? (
+              <button
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onPointerUp={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShareTarget({
+                    id: story.id,
+                    kind: "story",
+                    username: group.user.username,
+                    caption: `@${group.user.username} hekayəsi`,
+                  });
+                }}
+              >
+                Paylaş
+              </button>
+            ) : null}
             {group.user.id !== me?.id ? (
               <button
                 type="button"
@@ -167,13 +189,18 @@ export default function StoryViewer({ groups, startIndex, onClose }) {
             </button>
           </div>
         </div>
+        {canReply ? (
         <form className="story-reply" onSubmit={async (e) => {
           e.preventDefault();
           e.stopPropagation();
           if (!reply.trim()) return;
-          await api.post(`/api/stories/${story.id}/reply`, { text: reply.trim() });
-          setReply("");
-          setNote("Cavab getdi");
+          try {
+            await api.post(`/api/stories/${story.id}/reply`, { text: reply.trim() });
+            setReply("");
+            setNote("Cavab getdi");
+          } catch (err) {
+            setNote(err?.response?.data?.message || "Cavab getmədi");
+          }
         }} onClick={(e) => e.stopPropagation()}>
           {emojiOpen ? (
             <EmojiPad onPick={(emoji) => {
@@ -193,6 +220,7 @@ export default function StoryViewer({ groups, startIndex, onClose }) {
           <input ref={replyRef} value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Cavab yaz" onPointerDown={(e) => e.stopPropagation()} />
           <button type="submit">Göndər</button>
         </form>
+        ) : null}
         {group.user.id === me.id ? (
           <button type="button" className="story-save" onClick={async (e) => {
             e.stopPropagation();

@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { postApi } from "../../../features/post/services/postApi";
 import { mediaSrc } from "../../../utils/upload";
 import Icon from "../../../components/ui/Icon";
 import Button from "../../../components/ui/Button";
 import Input from "../../../components/ui/Input";
+import LoadingDots from "../../../components/ui/LoadingDots";
 import { notify } from "../../../stores/useNoticeStore";
 import { postHref } from "../../../utils/postHref";
 
@@ -15,16 +16,49 @@ export default function SavedPage() {
   const [name, setName] = useState("");
   const [active, setActive] = useState("");
   const [error, setError] = useState("");
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const busyRef = useRef(false);
+  const sentinelRef = useRef(null);
 
-  async function load() {
-    const data = await postApi.saved();
-    setPosts(data?.posts || []);
-    setCollections(data?.collections || []);
-  }
+  const load = useCallback(async (nextPage, replace) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    if (!replace) setLoadingMore(true);
+    try {
+      const data = await postApi.saved(nextPage, 12);
+      const rows = data?.posts || [];
+      setPosts((prev) => (replace ? rows : [...prev, ...rows]));
+      if (replace) setCollections(data?.collections || []);
+      setPage(nextPage);
+      setHasMore(!!data?.hasMore);
+      setError("");
+    } catch {
+      if (replace) {
+        setPosts([]);
+        setError("Saxlanılanlar açılmadı");
+      }
+      setHasMore(false);
+    } finally {
+      busyRef.current = false;
+      setLoadingMore(false);
+    }
+  }, []);
 
   useEffect(() => {
-    load().catch(() => setError("Saxlanılanlar açılmadı"));
-  }, []);
+    load(1, true);
+  }, [load]);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasMore || active) return undefined;
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) load(page + 1, false);
+    }, { rootMargin: "200px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, load, page, active]);
 
   async function create(e) {
     e.preventDefault();
@@ -145,6 +179,8 @@ export default function SavedPage() {
       ) : (
         <p className="muted">{active ? "Bu kolleksiya boşdur" : "Hələ heç nə yoxdur"}</p>
       )}
+      {!active ? <div ref={sentinelRef} /> : null}
+      {loadingMore ? <LoadingDots /> : null}
     </div>
   );
 }

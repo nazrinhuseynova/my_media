@@ -94,7 +94,7 @@ export default function ReelPlayer({ reel, active }) {
         </button>
         <button
           type="button"
-          onClick={() => setShareTarget({ ...item, videoUrl: item.videoUrl, media: [{ type: "video", url: item.videoUrl }], caption: item.caption })}
+          onClick={() => setShareTarget({ ...item, kind: "reel", videoUrl: item.videoUrl, media: [{ type: "video", url: item.videoUrl }], caption: item.caption })}
         >
           <Icon name="share" size={24} />
         </button>

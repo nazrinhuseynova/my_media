@@ -127,7 +127,7 @@ export default function LoginPage() {
           </div>
         ) : null}
         <form autoComplete="off" onSubmit={submit}>
-          <Input name="contact" placeholder="Phone, email, or username" value={values.contact} onChange={change} error={errors.contact} autoComplete="off" autoCorrect="off" spellCheck={false} />
+          <Input name="contact" placeholder="Email or username" value={values.contact} onChange={change} error={errors.contact} autoComplete="off" autoCorrect="off" spellCheck={false} />
           <Input name="password" type="password" placeholder="Password" value={values.password} onChange={change} error={errors.password} autoComplete="new-password" />
           {formError ? <p className="error-text">{formError}</p> : null}
           <Button disabled={busy} type="submit">{busy ? "Please wait..." : "Log in"}</Button>

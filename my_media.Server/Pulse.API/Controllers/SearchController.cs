@@ -30,11 +30,12 @@ public class SearchController : ControllerBase
     {
         q = (q ?? "").Trim().ToLower();
         if (q.Length == 0)
-            return Ok(new { users = Array.Empty<object>(), hashtags = Array.Empty<string>(), locations = Array.Empty<string>(), page = 1, pageSize, hasMore = false });
+            return Ok(new { users = Array.Empty<object>(), hashtags = Array.Empty<string>(), locations = Array.Empty<string>(), posts = Array.Empty<object>(), page = 1, pageSize, hasMore = false });
         var paging = Paging.Normalize(page, pageSize, 20, 40);
         var me = DtoMapper.GetUserId(User);
         var hidden = await _db.Blocks.Where(b => b.BlockerId == me).Select(b => b.BlockedId).ToListAsync();
         hidden.AddRange(await _db.Blocks.Where(b => b.BlockedId == me).Select(b => b.BlockerId).ToListAsync());
+        var following = await _db.Follows.AsNoTracking().Where(f => f.FollowerId == me).Select(f => f.FollowingId).ToListAsync();
         var adminIds = (await _users.GetUsersInRoleAsync("Admin")).Select(a => a.Id).ToList();
         var userQuery = _users.Users
             .Where(u => u.IsActive && !u.IsBanned && !hidden.Contains(u.Id) && !adminIds.Contains(u.Id) && (u.UserName!.ToLower().Contains(q) || u.FullName.ToLower().Contains(q)));
@@ -47,7 +48,7 @@ public class SearchController : ControllerBase
         var users = userPage.Take(paging.PageSize).ToList();
 
         var now = DateTime.UtcNow;
-        var hashtags = (await _db.Posts.AsNoTracking()
+        var tagRows = await _db.Posts.AsNoTracking()
             .Where(p => !p.IsDeleted && !p.IsDraft && !p.IsArchived
                 && (p.ScheduledAt == null || p.ScheduledAt <= now)
                 && p.Hashtags != null && p.Hashtags.ToLower().Contains(q)
@@ -55,14 +56,17 @@ public class SearchController : ControllerBase
                 && p.User.IsActive && !p.User.IsBanned && !p.User.IsPrivate)
             .Select(p => p.Hashtags)
             .Take(80)
-            .ToListAsync())
+            .ToListAsync();
+        var hashtagAll = tagRows
             .SelectMany(h => (h ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries))
             .Distinct()
             .Where(t => t.Contains(q))
-            .Take(20)
             .ToList();
+        var hashtags = hashtagAll.Skip((paging.Page - 1) * paging.PageSize).Take(paging.PageSize + 1).ToList();
+        var tagsHasMore = hashtags.Count > paging.PageSize;
+        hashtags = hashtags.Take(paging.PageSize).ToList();
 
-        var locations = await _db.Posts
+        var locationAll = await _db.Posts
             .Where(p => !p.IsDeleted && !p.IsDraft && !p.IsArchived
                 && (p.ScheduledAt == null || p.ScheduledAt <= now)
                 && p.Location != null && p.Location.ToLower().Contains(q)
@@ -70,21 +74,45 @@ public class SearchController : ControllerBase
                 && p.User.IsActive && !p.User.IsBanned && !p.User.IsPrivate)
             .Select(p => p.Location!)
             .Distinct()
-            .Take(20)
             .ToListAsync();
+        var locations = locationAll.Skip((paging.Page - 1) * paging.PageSize).Take(paging.PageSize + 1).ToList();
+        var locsHasMore = locations.Count > paging.PageSize;
+        locations = locations.Take(paging.PageSize).ToList();
+
+        var postQuery = _db.Posts.AsNoTracking()
+            .Where(p => !p.IsDeleted && !p.IsDraft && !p.IsArchived
+                && (p.ScheduledAt == null || p.ScheduledAt <= now)
+                && !hidden.Contains(p.UserId)
+                && p.User.IsActive && !p.User.IsBanned
+                && (!p.User.IsPrivate || p.UserId == me || following.Contains(p.UserId))
+                && ((p.Caption != null && p.Caption.ToLower().Contains(q))
+                    || (p.Hashtags != null && p.Hashtags.ToLower().Contains(q))
+                    || (p.Location != null && p.Location.ToLower().Contains(q))));
+        var postIds = await postQuery.OrderByDescending(p => p.CreatedAt)
+            .Skip((paging.Page - 1) * paging.PageSize)
+            .Take(paging.PageSize + 1)
+            .Select(p => p.Id)
+            .ToListAsync();
+        var postsHasMore = postIds.Count > paging.PageSize;
+        postIds = postIds.Take(paging.PageSize).ToList();
+        var loadedPosts = await LoadPosts(postIds);
+        var savedIds = await SavedIds(me, postIds);
+        var posts = loadedPosts.Select(p => DtoMapper.MapPost(p, me, _db, savedIds)).ToList();
 
         if (type == "user")
             return Ok(new { users = users.Select(u => DtoMapper.MapUser(u)), page = paging.Page, pageSize = paging.PageSize, hasMore = usersHasMore });
-        if (type == "hashtag") return Ok(new { hashtags, page = paging.Page, pageSize = paging.PageSize, hasMore = false });
-        if (type == "location") return Ok(new { locations, page = paging.Page, pageSize = paging.PageSize, hasMore = false });
+        if (type == "hashtag") return Ok(new { hashtags, page = paging.Page, pageSize = paging.PageSize, hasMore = tagsHasMore });
+        if (type == "location") return Ok(new { locations, page = paging.Page, pageSize = paging.PageSize, hasMore = locsHasMore });
+        if (type == "post") return Ok(new { posts, page = paging.Page, pageSize = paging.PageSize, hasMore = postsHasMore });
         return Ok(new
         {
             users = users.Select(u => DtoMapper.MapUser(u)),
             hashtags,
             locations,
+            posts,
             page = paging.Page,
             pageSize = paging.PageSize,
-            hasMore = usersHasMore
+            hasMore = usersHasMore || tagsHasMore || locsHasMore || postsHasMore
         });
     }
 

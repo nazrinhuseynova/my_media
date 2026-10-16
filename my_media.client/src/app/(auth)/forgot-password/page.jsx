@@ -14,7 +14,7 @@ export default function ForgotPage() {
     e.preventDefault();
     const value = contact.trim();
     if (!value) {
-      setError("Enter an email, phone, or username");
+      setError("Enter an email or username");
       return;
     }
     setBusy(true);
@@ -38,7 +38,7 @@ export default function ForgotPage() {
     <div className="auth-wrap" data-keep>
       <div className="card auth-card">
         <h1>Forgot password</h1>
-        <p className="muted auth-lead">Enter your email, phone, or username. We’ll send a code to reset your password.</p>
+        <p className="muted auth-lead">Enter your email or username. We’ll send a code to reset your password.</p>
         <form onSubmit={submit}>
           <Input
             value={contact}
@@ -46,7 +46,7 @@ export default function ForgotPage() {
               setContact(e.target.value);
               if (error) setError("");
             }}
-            label="Email, phone, or username"
+            label="Email or username"
             error={error}
             autoComplete="username"
           />

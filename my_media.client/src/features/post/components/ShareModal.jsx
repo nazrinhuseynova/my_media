@@ -23,27 +23,41 @@ export default function ShareModal() {
     }
     let alive = true;
     async function load() {
-      const [convs, search] = await Promise.all([
+      const [convs, following] = await Promise.all([
         api.get("/api/conversations").catch(() => []),
-        api.get("/api/search", { params: { q: "", type: "user" } }).catch(() => ({ users: [] })),
+        me?.username
+          ? api.get(`/api/users/${me.username}/following`).catch(() => [])
+          : Promise.resolve([]),
       ]);
       const chatList = Array.isArray(convs) ? convs : [];
-      const users = (search?.users || []).filter((u) => u.id && u.id !== me?.id);
-      const mapped = users.map((u) => {
-        const conv = chatList.find((c) => !c.isGroup && (c.members || []).some((m) => m.id === u.id));
-        return {
+      const byId = new Map();
+      chatList.filter((c) => !c.isGroup).forEach((c) => {
+        (c.members || []).forEach((u) => {
+          if (!u?.id || u.id === me?.id) return;
+          byId.set(u.id, {
+            key: u.id,
+            userId: u.id,
+            conversationId: c.id,
+            username: u.username,
+            avatar: u.avatar,
+          });
+        });
+      });
+      (Array.isArray(following) ? following : []).forEach((u) => {
+        if (!u?.id || u.id === me?.id || byId.has(u.id)) return;
+        byId.set(u.id, {
           key: u.id,
           userId: u.id,
-          conversationId: conv?.id,
+          conversationId: undefined,
           username: u.username,
           avatar: u.avatar,
-        };
+        });
       });
-      if (alive) setPeople(mapped);
+      if (alive) setPeople([...byId.values()]);
     }
     load();
     return () => { alive = false; };
-  }, [post, me?.id]);
+  }, [post, me?.id, me?.username]);
 
   async function shareTo(person) {
     if (busy) return;
@@ -56,8 +70,16 @@ export default function ShareModal() {
       }
       if (!id) return;
       await openChat(id);
-      const reel = Boolean(post.videoUrl);
-      await send({ type: reel ? "reel" : "post", sharedPostId: post.id, text: reel ? "Video" : "Paylaşım" });
+      if (post.kind === "story") {
+        await send({
+          type: "status",
+          text: post.caption || `Hekayə: @${post.username || "user"}`,
+          sharedPostId: post.id,
+        });
+      } else {
+        const reel = post.kind === "reel" || Boolean(post.videoUrl);
+        await send({ type: reel ? "reel" : "post", sharedPostId: post.id, text: reel ? "Video" : "Paylaşım" });
+      }
       setShareTarget(null);
     } finally {
       setBusy("");

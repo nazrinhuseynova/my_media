@@ -5,6 +5,7 @@ import IntroSplash from "./features/intro/IntroSplash";
 import WelcomePage from "./features/intro/WelcomePage";
 import { useAuthStore } from "./features/auth/store/useAuthStore";
 import { useNotificationStore } from "./stores/useNotificationStore";
+import { useUiPrefs } from "./stores/useUiPrefs";
 import { connectSocket, onSocket } from "./lib/socket";
 import AuthLayout from "./app/(auth)/layout";
 import MainLayout from "./app/(main)/layout";
@@ -73,6 +74,7 @@ export default function App() {
         loadNotes();
         connectSocket();
         return onSocket("notify", (n) => {
+            if (useUiPrefs.getState().pauseNotifications) return;
             useNotificationStore.setState((s) => {
                 if (s.items.some((x) => x.id === n.id)) return s;
                 return { items: [{ ...n, read: false }, ...s.items] };

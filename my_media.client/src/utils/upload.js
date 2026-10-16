@@ -33,9 +33,9 @@ export function parseMusic(value) {
 }
 
 export const MUSIC_TRACKS = [
-  { name: "Sunset Beat", url: "https://res.cloudinary.com/twv3frfo/video/upload/v1791500504/pulse/audio/sunset.wav" },
-  { name: "Night Drive", url: "https://res.cloudinary.com/twv3frfo/video/upload/v1791500506/pulse/audio/night.wav" },
-  { name: "City Lights", url: "https://res.cloudinary.com/twv3frfo/video/upload/v1791500507/pulse/audio/city.wav" },
+  { name: "Sunset Beat", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" },
+  { name: "Night Drive", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3" },
+  { name: "City Lights", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3" },
 ];
 
 export function resolveMusic(value) {

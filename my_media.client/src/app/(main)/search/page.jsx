@@ -138,6 +138,7 @@ export default function SearchPage() {
   const [users, setUsers] = useState([]);
   const [hashtags, setHashtags] = useState([]);
   const [locations, setLocations] = useState([]);
+  const [hitPosts, setHitPosts] = useState([]);
   const [items, setItems] = useState([]);
   const [ready, setReady] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -176,6 +177,7 @@ export default function SearchPage() {
       setUsers([]);
       setHashtags([]);
       setLocations([]);
+      setHitPosts([]);
       setSearching(false);
       return undefined;
     }
@@ -187,12 +189,14 @@ export default function SearchPage() {
         setUsers(data?.users || []);
         setHashtags(data?.hashtags || []);
         setLocations(data?.locations || []);
+        setHitPosts((data?.posts || []).map((p) => ({ ...p, kind: "post" })));
       })
       .catch(() => {
         if (cancel) return;
         setUsers([]);
         setHashtags([]);
         setLocations([]);
+        setHitPosts([]);
       })
       .finally(() => {
         if (!cancel) setSearching(false);
@@ -276,17 +280,9 @@ export default function SearchPage() {
 
   const queryOn = debounced.trim().length > 0;
   const posts = useMemo(() => {
-    const text = debounced.trim().toLowerCase();
-    if (!text) return items;
-    return items.filter((item) => {
-      const caption = String(item.caption || item.poll?.question || "").toLowerCase();
-      const name = String(item.user?.username || "").toLowerCase();
-      const full = String(item.user?.fullName || "").toLowerCase();
-      const tags = tagList(item).join(" ").toLowerCase();
-      const place = String(item.location || "").toLowerCase();
-      return caption.includes(text) || name.includes(text) || full.includes(text) || tags.includes(text) || place.includes(text);
-    });
-  }, [items, debounced]);
+    if (!queryOn) return items;
+    return hitPosts;
+  }, [items, hitPosts, queryOn]);
 
   const people = queryOn ? users : previewPeople(items);
   const tags = queryOn

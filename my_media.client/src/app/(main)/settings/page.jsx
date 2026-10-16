@@ -37,7 +37,7 @@ const LIBRARY = [
 const MENU = [
   { id: "account", icon: "user", title: "Hesabın", text: "Ad, bio, profil şəkli" },
   { id: "privacy", icon: "search", title: "Məxfilik", text: "Kim görür, kim yazır" },
-  { id: "notifications", icon: "heart", title: "Bildirişlər", text: "Push və xəbərlər" },
+  { id: "notifications", icon: "heart", title: "Bildirişlər", text: "Tətbiq xəbərləri" },
   { id: "security", icon: "user", title: "Təhlükəsizlik", text: "Şifrə və giriş" },
   { id: "sessions", icon: "messenger", title: "Sessiyalar", text: "Açıq cihazlar" },
   { id: "accounts", icon: "user", title: "Hesablar", text: "Keçid, əlavə, çıxış" },
