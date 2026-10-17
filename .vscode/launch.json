@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "chrome",
+      "request": "launch",
+      "name": "Pulse Chrome (Google login OK)",
+      "url": "https://localhost:53464/login",
+      "webRoot": "${workspaceFolder}/my_media.client",
+      "port": 9222
+    }
+  ]
+}

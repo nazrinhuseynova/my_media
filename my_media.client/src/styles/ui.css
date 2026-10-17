@@ -2879,7 +2879,7 @@
   border-radius: 50%;
   background: transparent;
   color: inherit;
-  opacity: 0;
+  opacity: 0.4;
   cursor: pointer;
   font-size: 14px;
   font-weight: 800;
@@ -8806,4 +8806,138 @@ body:has(.intro) .help-bot {
   .help-typing i {
     animation: none;
   }
+}
+
+/* ===== Mesajın içində sağ küncdə 3 nöqtə (WhatsApp stili) ===== */
+.msg-line {
+    display: flex;
+    align-items: center;
+    max-width: 100%;
+}
+
+    .msg-line .bubble {
+        min-width: 0;
+    }
+
+        .msg-line .bubble:not(.is-media) {
+            padding: 8px 36px 8px 12px;
+        }
+
+.msg-dots {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+}
+
+.bubble.me .msg-dots {
+    background: var(--accent-strong);
+    color: #fff;
+}
+
+.bubble.is-media .msg-dots {
+    background: rgba(0, 0, 0, 0.45);
+    color: #fff;
+}
+
+.bubble:hover .msg-dots,
+.msg-dots:focus-visible,
+.msg-dots.is-open {
+    opacity: 1;
+}
+
+.msg-dots:hover {
+    filter: brightness(1.12);
+}
+
+@media (hover: none) {
+    .msg-dots {
+        opacity: 0.6;
+    }
+}
+
+/* ===== Kiçik açılan menyu ===== */
+.msg-pop {
+    position: fixed;
+    z-index: 1300;
+    min-width: 200px;
+    max-width: min(280px, calc(100vw - 16px));
+    padding: 6px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--text);
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22);
+    animation: msg-pop-in 0.12s ease-out;
+}
+
+    .msg-pop.is-measuring {
+        visibility: hidden;
+    }
+
+@keyframes msg-pop-in {
+    from {
+        opacity: 0;
+        transform: scale(0.96);
+    }
+
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.msg-pop button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 10px 12px;
+    border: 0;
+    border-radius: 9px;
+    background: none;
+    color: inherit;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+    .msg-pop button:hover,
+    .msg-pop button:focus-visible {
+        background: var(--bg-hover);
+        outline: none;
+    }
+
+    .msg-pop button.is-danger {
+        color: var(--danger);
+    }
+
+.msg-pop hr {
+    height: 1px;
+    margin: 4px 6px;
+    border: 0;
+    background: var(--border);
+}
+
+.msg-pop-title {
+    padding: 8px 12px 2px;
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.msg-pop-note {
+    padding: 0 12px 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
 }
