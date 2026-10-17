@@ -42,7 +42,9 @@ public class AuthController : ControllerBase
         {
             googleClientId = _config["Google:ClientId"] ?? "",
             appleClientId = _config["Apple:ClientId"] ?? "",
-            facebookAppId = _config["Facebook:AppId"] ?? ""
+            facebookAppId = _config["Facebook:AppId"] ?? "",
+            githubClientId = _config["GitHub:ClientId"] ?? "",
+            microsoftClientId = _config["Microsoft:ClientId"] ?? ""
         });
     }
 
@@ -179,18 +181,26 @@ public class AuthController : ControllerBase
     [HttpPost("google")]
     [HttpPost("apple")]
     [HttpPost("facebook")]
+    [HttpPost("github")]
+    [HttpPost("microsoft")]
     public async Task<IActionResult> Social(SocialLoginRequest request)
     {
         var path = Request.Path.Value ?? "";
-        var provider = path.Contains("facebook", StringComparison.OrdinalIgnoreCase)
-            ? "facebook"
-            : path.Contains("google", StringComparison.OrdinalIgnoreCase) ? "google" : "apple";
+        var provider = path.Contains("facebook", StringComparison.OrdinalIgnoreCase) ? "facebook"
+            : path.Contains("github", StringComparison.OrdinalIgnoreCase) ? "github"
+            : path.Contains("microsoft", StringComparison.OrdinalIgnoreCase) ? "microsoft"
+            : path.Contains("google", StringComparison.OrdinalIgnoreCase) ? "google"
+            : "apple";
         ProviderIdentity identity;
         try
         {
-            identity = provider == "facebook"
-                ? await ProviderTokenVerifier.ReadFacebookAsync(request.IdToken, _config["Facebook:AppId"], _config["Facebook:AppSecret"])
-                : await ProviderTokenVerifier.ReadAsync(provider, request.IdToken, provider == "google" ? _config["Google:ClientId"] : _config["Apple:ClientId"]);
+            identity = provider switch
+            {
+                "facebook" => await ProviderTokenVerifier.ReadFacebookAsync(request.IdToken, _config["Facebook:AppId"], _config["Facebook:AppSecret"]),
+                "github" => await ProviderTokenVerifier.ReadGitHubAsync(request.IdToken, _config["GitHub:ClientId"], _config["GitHub:ClientSecret"], OAuthRedirectUri()),
+                "microsoft" => await ProviderTokenVerifier.ReadMicrosoftAsync(request.IdToken, _config["Microsoft:ClientId"]),
+                _ => await ProviderTokenVerifier.ReadAsync(provider, request.IdToken, provider == "google" ? _config["Google:ClientId"] : _config["Apple:ClientId"])
+            };
         }
         catch (InvalidOperationException ex)
         {
@@ -557,11 +567,27 @@ public class AuthController : ControllerBase
             u.PhoneNumber == contact || u.PhoneNumber == phone);
     }
 
+    private string OAuthRedirectUri()
+    {
+        var origin = Request.Headers.Origin.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(origin))
+        {
+            var referer = Request.Headers.Referer.FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(referer) && Uri.TryCreate(referer, UriKind.Absolute, out var uri))
+                origin = uri.GetLeftPart(UriPartial.Authority);
+        }
+        if (string.IsNullOrWhiteSpace(origin))
+            origin = _config["Client:Origin"] ?? "https://localhost:53464";
+        return origin.TrimEnd('/') + "/oauth-callback.html";
+    }
+
     private static string ProviderPerson(string provider) => provider switch
     {
         "google" => "Google istifadəçisi",
         "apple" => "Apple istifadəçisi",
         "facebook" => "Facebook istifadəçisi",
+        "github" => "GitHub istifadəçisi",
+        "microsoft" => "Microsoft istifadəçisi",
         _ => "İstifadəçi"
     };
 

@@ -4,41 +4,94 @@ import { api } from "../../../services/api";
 import { guestMessage } from "../services/authApi";
 import { requestGoogleIdToken } from "../services/googleOAuth";
 
-let facebookReady = null;
-
-function prepareFacebook(appId) {
-  if (window.FB) {
-    window.FB.init({ appId, cookie: false, xfbml: false, version: "v21.0" });
-    return Promise.resolve();
-  }
-  if (facebookReady) return facebookReady;
-  facebookReady = new Promise((resolve, reject) => {
-    window.fbAsyncInit = () => {
-      window.FB.init({ appId, cookie: false, xfbml: false, version: "v21.0" });
-      resolve();
-    };
-    const script = document.createElement("script");
-    script.id = "pulse-facebook-sdk";
-    script.src = "https://connect.facebook.net/en_US/sdk.js";
-    script.async = true;
-    script.crossOrigin = "anonymous";
-    script.onerror = () => {
-      facebookReady = null;
-      reject(new Error("Couldn't load the sign-in script. Check your connection"));
-    };
-    document.body.appendChild(script);
-  });
-  return facebookReady;
+function oauthRedirectUri() {
+  return `${window.location.origin}/oauth-callback.html`;
 }
 
-function facebookCredential(appId) {
-  return prepareFacebook(appId).then(() => new Promise((resolve, reject) => {
-    window.FB.login((response) => {
-      const token = response?.authResponse?.accessToken;
-      if (token) resolve(token);
-      else reject(new Error("cancelled"));
-    }, { scope: "email,public_profile" });
-  }));
+function popupOAuthCode(url, provider) {
+  return new Promise((resolve, reject) => {
+    const popup = window.open(url, "pulse-oauth", "width=520,height=700,menubar=no,toolbar=no");
+    if (!popup) {
+      reject(new Error("cancelled"));
+      return;
+    }
+    let settled = false;
+    let closeAt = 0;
+    function done(err, code) {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener("message", onMessage);
+      clearInterval(timer);
+      try { popup.close(); } catch { /* ignore */ }
+      if (err) reject(err);
+      else resolve(code);
+    }
+    function onMessage(event) {
+      if (event.origin !== window.location.origin) return;
+      const data = event.data;
+      if (!data || data.type !== "pulse-oauth" || data.provider !== provider) return;
+      if (data.error || !data.code) done(new Error("cancelled"));
+      else done(null, data.code);
+    }
+    window.addEventListener("message", onMessage);
+    const timer = setInterval(() => {
+      if (!popup.closed) return;
+      if (!closeAt) closeAt = Date.now();
+      // Wait briefly so postMessage from the callback page can arrive before we treat close as cancel.
+      if (Date.now() - closeAt > 800) done(new Error("cancelled"));
+    }, 200);
+  });
+}
+
+function githubCredential(clientId) {
+  const redirectUri = oauthRedirectUri();
+  const state = `github.${crypto.randomUUID().replace(/-/g, "")}`;
+  const url = "https://github.com/login/oauth/authorize"
+    + `?client_id=${encodeURIComponent(clientId)}`
+    + `&redirect_uri=${encodeURIComponent(redirectUri)}`
+    + "&scope=user:email"
+    + `&state=${encodeURIComponent(state)}`;
+  return popupOAuthCode(url, "github");
+}
+
+async function sha256Base64Url(text) {
+  const data = new TextEncoder().encode(text);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  const bytes = String.fromCharCode(...new Uint8Array(hash));
+  return btoa(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function microsoftCredential(clientId) {
+  const redirectUri = oauthRedirectUri();
+  const verifier = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+  const challenge = await sha256Base64Url(verifier);
+  const state = `microsoft.${crypto.randomUUID().replace(/-/g, "")}`;
+  const url = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+    + `?client_id=${encodeURIComponent(clientId)}`
+    + "&response_type=code"
+    + `&redirect_uri=${encodeURIComponent(redirectUri)}`
+    + `&scope=${encodeURIComponent("openid profile email User.Read")}`
+    + "&response_mode=query"
+    + `&state=${encodeURIComponent(state)}`
+    + `&code_challenge=${encodeURIComponent(challenge)}`
+    + "&code_challenge_method=S256";
+  const code = await popupOAuthCode(url, "microsoft");
+  const body = new URLSearchParams({
+    client_id: clientId,
+    scope: "openid profile email User.Read",
+    code,
+    redirect_uri: redirectUri,
+    grant_type: "authorization_code",
+    code_verifier: verifier,
+  });
+  const res = await fetch("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.id_token) throw new Error("Microsoft sign-in didn't work");
+  return data.id_token;
 }
 
 function cancelled(err) {
@@ -48,17 +101,26 @@ function cancelled(err) {
 
 function providerId(data, kind) {
   if (kind === "google") return data?.googleClientId;
-  return data?.facebookAppId;
+  if (kind === "github") return data?.githubClientId;
+  return data?.microsoftClientId;
 }
 
 function missingText(kind) {
   if (kind === "google") return "Google sign-in isn't available right now";
-  return "Facebook sign-in isn't available right now";
+  if (kind === "github") return "GitHub sign-in isn't available right now";
+  return "Microsoft sign-in isn't available right now";
 }
 
 function failedText(kind) {
   if (kind === "google") return "Google sign-in didn't work";
-  return "Facebook sign-in didn't work";
+  if (kind === "github") return "GitHub sign-in didn't work";
+  return "Microsoft sign-in didn't work";
+}
+
+async function credentialFor(kind, clientId) {
+  if (kind === "google") return requestGoogleIdToken(clientId);
+  if (kind === "github") return githubCredential(clientId);
+  return microsoftCredential(clientId);
 }
 
 export default function ProviderButtons({ busy, divider, onToken, onError }) {
@@ -75,9 +137,7 @@ export default function ProviderButtons({ busy, divider, onToken, onError }) {
         onError(missingText(kind));
         return;
       }
-      const token = kind === "google"
-        ? await requestGoogleIdToken(clientId)
-        : await facebookCredential(clientId);
+      const token = await credentialFor(kind, clientId);
       await onToken(kind, token);
     } catch (err) {
       if (cancelled(err)) return;
@@ -92,11 +152,14 @@ export default function ProviderButtons({ busy, divider, onToken, onError }) {
     <>
       {divider ? <div className="auth-or"><span>or</span></div> : null}
       <div className="auth-providers">
-        <Button className="auth-provider" variant="ghost" type="button" disabled={busy || !!pending} onClick={() => start("facebook")}>
-          {pending === "facebook" ? "Opening Facebook..." : "Continue with Facebook"}
-        </Button>
         <Button className="auth-provider" variant="ghost" type="button" disabled={busy || !!pending} onClick={() => start("google")}>
           {pending === "google" ? "Opening Google..." : "Continue with Google"}
+        </Button>
+        <Button className="auth-provider" variant="ghost" type="button" disabled={busy || !!pending} onClick={() => start("github")}>
+          {pending === "github" ? "Opening GitHub..." : "Continue with GitHub"}
+        </Button>
+        <Button className="auth-provider" variant="ghost" type="button" disabled={busy || !!pending} onClick={() => start("microsoft")}>
+          {pending === "microsoft" ? "Opening Microsoft..." : "Continue with Microsoft"}
         </Button>
       </div>
     </>

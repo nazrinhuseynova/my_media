@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Signing in…</title>
+</head>
+<body>
+<script>
+  (function () {
+    var params = new URLSearchParams(window.location.search);
+    var hash = (window.location.hash || "").replace(/^#/, "");
+    if (hash) {
+      var hp = new URLSearchParams(hash);
+      hp.forEach(function (v, k) { if (!params.has(k)) params.set(k, v); });
+    }
+    var state = params.get("state") || "";
+    var provider = state.indexOf("microsoft") === 0 ? "microsoft" : "github";
+    var payload = {
+      type: "pulse-oauth",
+      provider: provider,
+      code: params.get("code") || "",
+      error: params.get("error") || params.get("error_description") || ""
+    };
+    if (window.opener && !window.opener.closed) {
+      window.opener.postMessage(payload, window.location.origin);
+    }
+    window.close();
+    document.body.textContent = "You can close this window.";
+  })();
+</script>
+</body>
+</html>

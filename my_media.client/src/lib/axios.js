@@ -28,6 +28,8 @@ const AUTH_OPEN = [
   "/api/auth/google",
   "/api/auth/apple",
   "/api/auth/facebook",
+  "/api/auth/github",
+  "/api/auth/microsoft",
   "/api/auth/verify-otp",
   "/api/auth/forgot-password",
   "/api/auth/reset-password",
