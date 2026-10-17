@@ -54,46 +54,6 @@ function githubCredential(clientId) {
   return popupOAuthCode(url, "github");
 }
 
-async function sha256Base64Url(text) {
-  const data = new TextEncoder().encode(text);
-  const hash = await crypto.subtle.digest("SHA-256", data);
-  const bytes = String.fromCharCode(...new Uint8Array(hash));
-  return btoa(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-async function microsoftCredential(clientId) {
-  const redirectUri = oauthRedirectUri();
-  const verifier = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
-  const challenge = await sha256Base64Url(verifier);
-  const state = `microsoft.${crypto.randomUUID().replace(/-/g, "")}`;
-  const url = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
-    + `?client_id=${encodeURIComponent(clientId)}`
-    + "&response_type=code"
-    + `&redirect_uri=${encodeURIComponent(redirectUri)}`
-    + `&scope=${encodeURIComponent("openid profile email User.Read")}`
-    + "&response_mode=query"
-    + `&state=${encodeURIComponent(state)}`
-    + `&code_challenge=${encodeURIComponent(challenge)}`
-    + "&code_challenge_method=S256";
-  const code = await popupOAuthCode(url, "microsoft");
-  const body = new URLSearchParams({
-    client_id: clientId,
-    scope: "openid profile email User.Read",
-    code,
-    redirect_uri: redirectUri,
-    grant_type: "authorization_code",
-    code_verifier: verifier,
-  });
-  const res = await fetch("https://login.microsoftonline.com/common/oauth2/v2.0/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.id_token) throw new Error("Microsoft sign-in didn't work");
-  return data.id_token;
-}
-
 function cancelled(err) {
   const text = `${err?.error || ""} ${err?.message || ""}`;
   return /cancelled|popup_closed|user_cancelled/i.test(text);
@@ -101,26 +61,22 @@ function cancelled(err) {
 
 function providerId(data, kind) {
   if (kind === "google") return data?.googleClientId;
-  if (kind === "github") return data?.githubClientId;
-  return data?.microsoftClientId;
+  return data?.githubClientId;
 }
 
 function missingText(kind) {
   if (kind === "google") return "Google sign-in isn't available right now";
-  if (kind === "github") return "GitHub sign-in isn't available right now";
-  return "Microsoft sign-in isn't available right now";
+  return "GitHub sign-in isn't available right now";
 }
 
 function failedText(kind) {
   if (kind === "google") return "Google sign-in didn't work";
-  if (kind === "github") return "GitHub sign-in didn't work";
-  return "Microsoft sign-in didn't work";
+  return "GitHub sign-in didn't work";
 }
 
 async function credentialFor(kind, clientId) {
   if (kind === "google") return requestGoogleIdToken(clientId);
-  if (kind === "github") return githubCredential(clientId);
-  return microsoftCredential(clientId);
+  return githubCredential(clientId);
 }
 
 export default function ProviderButtons({ busy, divider, onToken, onError }) {
@@ -157,9 +113,6 @@ export default function ProviderButtons({ busy, divider, onToken, onError }) {
         </Button>
         <Button className="auth-provider" variant="ghost" type="button" disabled={busy || !!pending} onClick={() => start("github")}>
           {pending === "github" ? "Opening GitHub..." : "Continue with GitHub"}
-        </Button>
-        <Button className="auth-provider" variant="ghost" type="button" disabled={busy || !!pending} onClick={() => start("microsoft")}>
-          {pending === "microsoft" ? "Opening Microsoft..." : "Continue with Microsoft"}
         </Button>
       </div>
     </>
