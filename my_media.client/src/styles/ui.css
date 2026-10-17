@@ -324,7 +324,6 @@
   top: 0;
   bottom: 0;
   width: var(--nav-width);
-  border-right: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   padding: 24px 14px;
   display: flex;
   flex-direction: column;
@@ -335,6 +334,29 @@
   backdrop-filter: blur(22px) saturate(1.2);
   z-index: 20;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text) 22%, transparent) transparent;
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 3px;
+}
+
+.sidebar::-webkit-scrollbar-track {
+  background: transparent;
+  border: none;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text) 22%, transparent);
+  border-radius: 999px;
+  border: none;
+}
+
+.sidebar::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .brand {

@@ -8,8 +8,8 @@
     <title>Pulse</title>
     <script>
       try {
-        var t = localStorage.getItem("pulse_theme");
-        if (t === "dark" || t === "light") document.documentElement.setAttribute("data-theme", t);
+        /* Guest / intro / login always open light; account theme applies after login. */
+        document.documentElement.setAttribute("data-theme", "light");
       } catch (e) {}
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
